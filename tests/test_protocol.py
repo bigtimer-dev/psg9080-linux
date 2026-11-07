@@ -133,6 +133,15 @@ class ModulationTest(unittest.TestCase):
         with self.assertRaises(P.ProtocolError):
             P.write_cmd(76, 1)
 
+    def test_external_sweep(self):
+        self.assertEqual(P.sweep_screen(1, external=True), (0, 7, 1, 7))
+        self.assertEqual(P.sweep_screen(2), (0, 6, 2, 6))
+        st = P.DeviceState()
+        st.apply(72, ["00554"])
+        st.apply(73, ["45789"])
+        st.apply(65, ["0", "1"])
+        self.assertEqual((st.sweep.vco_lo, st.sweep.vco_hi, st.sweep.running), (554, 45789, True))
+
     def test_memory_and_program_commands(self):
         self.assertEqual(P.memory_cmd(7, P.MEM_SAVE), b":w26=7,222.\r\n")
         with self.assertRaises(P.ProtocolError):

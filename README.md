@@ -13,7 +13,7 @@ two-channel signal generator. Talks to it over the **BSG145 Bluetooth LE module*
   generator flatness. Asks before switching anything on; restores generator and scope settings afterwards.
   Note: on DHO800/900 firmware 00.05.02 `:MEAS:ITEM?` makes the SCPI server drop the connection (it restarts after
   ~10 s), which is why the app never uses it.
-- **Sweep** of frequency, amplitude or duty cycle: channel, start/end value, time (10 ms … 640 s), up / down / round trip, linear / log,
+- **Sweep** of frequency, amplitude or duty cycle, over time or set by an external voltage (VCO input): channel, start/end value, time (10 ms … 640 s), up / down / round trip, linear / log,
   start/stop, with a frequency-vs-time preview.
 - **Modulation**: internal (sine / square / triangle / ramp) or external (MOD input) source; AM, FM, PM, ASK, FSK, PSK, pulse mode ("PWM": exact pulse width / period / invert) and burst (pulse count, trigger source, Trigger button) with modulation frequency, depth, FM/PM deviation and FSK hop
   frequency; shows the generator's AM depth as the textbook depth too (they differ, see below).
@@ -50,7 +50,7 @@ Pair the Bluetooth module once: `bluetoothctl scan le`, then `pair` / `trust` it
 | 19 / 20 | duty | 0.01 % |
 | 21 / 22 | phase | 0.01 ° |
 | 25 | CH2 sync flags: waveform, frequency, amplitude, offset, duty, external | 6 × 0/1 |
-| 24 | front-panel screen: `0,1,0,1` main, `0,6,X,6` sweep (X = 0 frequency, 1 amplitude, 2 duty), `0,1,0,12` modulation, `0,1,0,8` pulse ("PWM") | sweep/modulation only run on their screen |
+| 24 | front-panel screen: `0,1,0,1` main, `0,6,X,6` sweep (X = 0 frequency, 1 amplitude, 2 duty), `0,7,X,7` sweep controlled by the external voltage, `0,1,0,12` modulation, `0,1,0,8` pulse ("PWM") | sweep/modulation only run on their screen |
 | 40 | modulation type `ch1,ch2` | 0 AM, 1 FM, 2 PM, 3 ASK, 4 FSK, 5 PSK, 6 PWM, 7 Burst |
 | 41 | internal modulating shape `ch1,ch2` | 0 sine, 1 square, 2 triangle, 3 ramp |
 | 42 | modulation source `ch1,ch2` | 0 internal, 1 external (MOD input) |
@@ -73,6 +73,7 @@ Pair the Bluetooth module once: `bluetoothctl scan le`, then `pair` / `trust` it
 | 26 | memory command `slot,action`: 111 load, 222 save, 333 clear (M00–M99) | |
 | `:qNN` / `:pNN` | read / write Programming-mode program NN (0–19): 100 × `memory,time,goto,loop` (loop 99 = forever); reading also makes it the current program | |
 | 97 | read: calibration table (32 values). Writing is blocked in the app | |
+| 72 / 73 | external-voltage sweep: input ADC level for the start / end value (set on the panel) | |
 | 76 | Programming-mode run: `1` starts program P00, which loads memory M00 over the current settings (blocked in the app) | |
 | 74 | write `1,0,0,0` = fire one burst (same as the Trig. key) | one-shot |
 | 64 | sweep `channel,time,direction,mode` | ch 0/1, time 10 ms, dir 0 up / 1 down / 2 round trip, mode 0 lin / 1 log |

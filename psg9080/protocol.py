@@ -240,14 +240,17 @@ class Channel:
 
 SWEEP_DIRECTIONS = ["Up", "Down", "Round trip"]
 SWEEP_MODES = ["Linear", "Logarithmic"]
-SWEEP_REGS = [24, 64, 65, 66, 67, 68, 69, 70, 71]
+SWEEP_REGS = [24, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73]
+SWEEP_CONTROLS = ["Time", "External voltage (VCO input)"]
 SWEEP_OBJECTS = ["Frequency", "Amplitude", "Duty cycle"]
 SCREEN_MAIN = (0, 1, 0, 1)         # register 24 values
 SCREEN_SWEEP = (0, 6, 0, 6)
 
 
-def sweep_screen(obj: int) -> tuple[int, ...]:
-    return (0, 6, obj, 6)
+def sweep_screen(obj: int, external: bool = False) -> tuple[int, ...]:
+    """Panel screen for a sweep. External = the input voltage sets the position between start and end
+    (screen 7; verified 2026-11-07: open input -> start value)."""
+    return (0, 7, obj, 7) if external else (0, 6, obj, 6)
 SCREEN_MOD = (0, 1, 0, 12)
 SCREEN_PWM = (0, 1, 0, 8)
 
@@ -318,6 +321,8 @@ class Sweep:
     end_mv: int = 6000
     start_duty: int = 2000         # duty sweep, 0.01 %
     end_duty: int = 8000
+    vco_lo: int = 554              # external control: ADC level that maps to the start value (r72)
+    vco_hi: int = 45789            # ... and to the end value (r73)
 
 
 def sweep_config_cmd(sw: "Sweep") -> tuple[int, ...]:
@@ -399,7 +404,11 @@ class DeviceState:
                 sw = self.sweep
                 sw.channel, sw.time_cs, sw.direction, sw.log = int(f[0]), int(f[1]), int(f[2]), f[3] == "1"
             elif reg == 65:
-                self.sweep.running = f[0] == "1"
+                self.sweep.running = f[0] == "1" or (len(f) > 1 and f[1] == "1")
+            elif reg == 72:
+                self.sweep.vco_lo = int(f[0])
+            elif reg == 73:
+                self.sweep.vco_hi = int(f[0])
             elif reg == 66:
                 self.sweep.start_dhz = int(f[0])
             elif reg == 67:

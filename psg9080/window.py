@@ -354,6 +354,14 @@ class SweepPage(Gtk.Box):
         self.obj = Adw.ComboRow(title="Sweep", model=Gtk.StringList.new(P.SWEEP_OBJECTS))
         self.obj.connect("notify::selected", self._on_obj)
         g.add(self.obj)
+        self.ctl = Adw.ComboRow(title="Control", model=Gtk.StringList.new(P.SWEEP_CONTROLS),
+                                subtitle="External: the voltage on the VCO input sets the position between start "
+                                         "and end")
+        self.ctl.connect("notify::selected", self._on_ctl)
+        g.add(self.ctl)
+        self.limits = Adw.ActionRow(title="Input limits", subtitle="ADC level for start / end (set on the panel)")
+        self.limits_lbl = Gtk.Label(css_classes=["dim-label"])
+        self.limits.add_suffix(self.limits_lbl)
         self.start = Adw.EntryRow(title="Start", show_apply_button=True)
         self.end = Adw.EntryRow(title="End", show_apply_button=True)
         self.time = Adw.SpinRow(title="Sweep time", subtitle="seconds", digits=2,
@@ -361,8 +369,9 @@ class SweepPage(Gtk.Box):
                                                           page_increment=1, value=10))
         self.dir = Adw.ComboRow(title="Direction", model=Gtk.StringList.new(P.SWEEP_DIRECTIONS))
         self.mode = Adw.ComboRow(title="Mode", model=Gtk.StringList.new(P.SWEEP_MODES))
-        for row in (self.chan, self.start, self.end, self.time, self.dir, self.mode):
+        for row in (self.chan, self.start, self.end, self.time, self.dir, self.mode, self.limits):
             g.add(row)
+        self.limits.set_visible(False)
         page.append(g)
         for e, end in ((self.start, 0), (self.end, 1)):
             e.connect("apply", self._on_value, end)
@@ -393,8 +402,14 @@ class SweepPage(Gtk.Box):
             if not self.time.has_focus() and not self._tid:
                 self.time.set_value(sw.time_cs / 100)
             scr = self.win.gen.state.screen
-            if len(scr) == 4 and scr[1] == 6:          # panel is on a sweep screen: follow its object
+            if len(scr) == 4 and scr[1] in (6, 7):     # panel is on a sweep screen: follow its object
                 self.obj.set_selected(min(scr[2], 2))
+                self.ctl.set_selected(int(scr[1] == 7))
+            ext = self.ctl.get_selected() == 1
+            self.time.set_visible(not ext)
+            self.dir.set_visible(not ext)
+            self.limits.set_visible(ext)
+            self.limits_lbl.set_label(f"{sw.vco_lo} / {sw.vco_hi}")
             obj = self.obj.get_selected()
             v0, v1 = self._values(sw, obj)
             self.start.set_title(f"Start {P.SWEEP_OBJECTS[obj].lower()} ({self._units(obj)})")
@@ -414,7 +429,7 @@ class SweepPage(Gtk.Box):
         g = self.win.gen
         if self.run.get_active():
             # the generator only sweeps while its screen is in sweep mode: switch it there first
-            g.write(24, *P.sweep_screen(self.obj.get_selected()))
+            g.write(24, *P.sweep_screen(self.obj.get_selected(), self.ctl.get_selected() == 1))
             g.write(65, 1, 1, cb=lambda: g.read(24, 65))
         else:
             g.write(65, 0, 0)
@@ -445,7 +460,11 @@ class SweepPage(Gtk.Box):
         self.refresh()
         g = self.win.gen
         if self.run.get_active():                     # switch the running sweep to the new object
-            g.write(24, *P.sweep_screen(self.obj.get_selected()), cb=lambda: g.read(24))
+            g.write(24, *P.sweep_screen(self.obj.get_selected(), self.ctl.get_selected() == 1),
+                    cb=lambda: g.read(24))
+
+    def _on_ctl(self, *_a) -> None:
+        self._on_obj()
 
     def _on_value(self, entry, end: int) -> None:
         obj = self.obj.get_selected()
