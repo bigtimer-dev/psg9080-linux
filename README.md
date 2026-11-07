@@ -8,8 +8,11 @@ two-channel signal generator. Talks to it over the **BSG145 Bluetooth LE module*
 - Arbitrary waveform designer: type an expression of `t` (or pick a preset), preview it and upload 2048 × 14-bit
   points to a slot. Verified by reading the slot back.
 - **Bode plot** with a Rigol DHO scope over LAN (SCPI, port 5555): steps the generator over a log frequency range,
-  autoscales both scope channels, measures Vpp in/out and phase, plots gain (dB) and phase, exports CSV. Asks before
-  switching anything on and restores the generator's frequency and output state afterwards.
+  autoscales both scope channels, downloads one acquisition of both channels and measures amplitude and phase at the
+  test frequency itself (single-bin DFT), plots gain (dB) and phase, exports CSV. Same channel for input and output =
+  generator flatness. Asks before switching anything on; restores generator and scope settings afterwards.
+  Note: on DHO800/900 firmware 00.05.02 `:MEAS:ITEM?` makes the SCPI server drop the connection (it restarts after
+  ~10 s), which is why the app never uses it.
 - Console for raw commands, with the calibration / flash commands (`w97`, `w98`) blocked.
 
 ## Install

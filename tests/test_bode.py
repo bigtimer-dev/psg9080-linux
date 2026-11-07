@@ -13,7 +13,7 @@ FC = 10_000.0       # simulated RC low-pass corner
 
 
 class FakeScope(threading.Thread):
-    """Minimal DHO SCPI server: CH1 = generator, CH2 = RC low-pass output."""
+    """Minimal DHO SCPI server: CH1 = generator, CH2 = RC low-pass output. Serves 1000-point byte waveforms."""
 
     def __init__(self, gen):
         super().__init__(daemon=True)
@@ -22,14 +22,22 @@ class FakeScope(threading.Thread):
         self.srv.bind(("127.0.0.1", 0))
         self.srv.listen(1)
         self.port = self.srv.getsockname()[1]
-        self.scale = {1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0}
-        self.disp = set()
+        self.scale = {1: 1.0, 2: 1.0, 3: 0.05, 4: 0.05}
+        self.disp = {1: 1, 2: 0, 3: 0, 4: 0}
+        self.tb, self.src, self.trig, self.sweep = 5e-6, 1, "CHAN1", "AUTO"
 
-    def _vpp(self, ch):
+    def _wave(self, ch):
         c = self.gen.state.ch[0]
-        f, a = c.freq_mhz / 1000, c.ampl_mv / 1000 if c.output else 0.0
-        v = a if ch == 1 else a / math.sqrt(1 + (f / FC) ** 2)
-        return 9.9e37 if ch not in self.disp or v > 8 * self.scale[ch] else v
+        f, a = c.freq_mhz / 1000, (c.ampl_mv / 1000 if c.output else 0.0)
+        amp, ph = a / 2, 0.0
+        if ch == 2:
+            amp /= math.sqrt(1 + (f / FC) ** 2)
+            ph = -math.atan(f / FC)
+        xinc = self.tb * 10 / 1000
+        yinc = self.scale[ch] * 8 / 256
+        data = bytes(max(0, min(255, int(round(128 + amp * math.sin(2 * math.pi * f * i * xinc + 0.3 + ph) / yinc))))
+                     for i in range(1000))
+        return data, xinc, yinc
 
     def run(self):
         conn, _ = self.srv.accept()
@@ -39,17 +47,39 @@ class FakeScope(threading.Thread):
             reply = None
             if cmd == "*IDN?":
                 reply = "FAKE,DHO,0,1"
-            elif cmd.endswith(":DISP ON"):
-                self.disp.add(int(cmd[5]))
-            elif cmd.endswith(":SCAL?") and cmd.startswith(":CHAN"):
-                reply = f"{self.scale[int(cmd[5])]:e}"
-            elif cmd.startswith(":CHAN") and ":SCAL " in cmd:
-                self.scale[int(cmd[5])] = float(cmd.split()[1])
-            elif cmd.startswith(":MEAS:ITEM? VPP"):
-                reply = f"{self._vpp(int(cmd[-1])):e}"
-            elif cmd.startswith(":MEAS:ITEM? RRPH"):
-                fr = self.gen.state.ch[0].freq_mhz / 1000
-                reply = f"{-math.degrees(math.atan(fr / FC)):e}"
+            elif cmd.startswith(":CHAN") and ":DISP" in cmd:
+                ch = int(cmd[5])
+                if cmd.endswith("?"):
+                    reply = str(self.disp[ch])
+                else:
+                    self.disp[ch] = int(cmd.split()[1])
+            elif cmd.startswith(":CHAN") and ":SCAL" in cmd:
+                ch = int(cmd[5])
+                if cmd.endswith("?"):
+                    reply = f"{self.scale[ch]:e}"
+                elif self.disp[ch]:
+                    self.scale[ch] = float(cmd.split()[1])
+            elif cmd == ":TIM:SCAL?":
+                reply = f"{self.tb:e}"
+            elif cmd.startswith(":TIM:SCAL "):
+                self.tb = float(cmd.split()[1])
+            elif cmd == ":TRIG:EDGE:SOUR?":
+                reply = self.trig
+            elif cmd.startswith(":TRIG:EDGE:SOUR "):
+                self.trig = cmd.split()[1]
+            elif cmd == ":TRIG:SWE?":
+                reply = self.sweep
+            elif cmd.startswith(":WAV:SOUR CHAN"):
+                self.src = int(cmd[-1])
+            elif cmd == ":WAV:PRE?":
+                _, xinc, yinc = self._wave(self.src)
+                reply = f"0,0,1000,1,{xinc:e},0,0,{yinc:e},0,128"
+            elif cmd == ":WAV:DATA?":
+                data, _, _ = self._wave(self.src)
+                conn.sendall(b"#41000" + data + b"\n")
+            elif cmd.startswith(":MEAS"):
+                conn.close()            # like the real firmware: never send measurement queries
+                return
             if reply is not None:
                 conn.sendall((reply + "\n").encode())
 
@@ -91,16 +121,21 @@ class BodeTest(unittest.TestCase):
             sw.start()
             GLib.timeout_add_seconds(20, loop.quit)
             loop.run()
+        scope.query("*IDN?")              # the fake scope handles commands in order: flush
         scope.close()
         self.assertEqual(done, ["Sweep finished"])
         self.assertEqual(len(pts), 9)
         for p in pts:
             expected = -10 * math.log10(1 + (p.freq / FC) ** 2)
-            self.assertAlmostEqual(p.gain_db, expected, places=3)
-            self.assertAlmostEqual(p.phase_deg, -math.degrees(math.atan(p.freq / FC)), places=3)
-        # generator restored: frequency back to 1 kHz, outputs back off
+            self.assertAlmostEqual(p.gain_db, expected, delta=0.15)       # 8-bit samples
+            self.assertAlmostEqual(p.phase_deg, -math.degrees(math.atan(p.freq / FC)), delta=1.0)
+        # generator restored: frequency, amplitude and outputs as before
         self.assertEqual(gen.state.ch[0].freq_mhz, 1_000_000)
-        self.assertEqual(gen.log[-1], (10, (0, 0)))
+        self.assertEqual(gen.state.ch[0].ampl_mv, 5000)
+        self.assertFalse(gen.state.ch[0].output or gen.state.ch[1].output)
+        # scope restored
+        self.assertEqual((fake.disp, fake.scale, fake.tb), ({1: 1, 2: 0, 3: 0, 4: 0},
+                                                            {1: 1.0, 2: 1.0, 3: 0.05, 4: 0.05}, 5e-6))
         csv = B.to_csv(pts)
         self.assertTrue(csv.startswith("freq_hz,") and csv.count("\n") == 10)
 

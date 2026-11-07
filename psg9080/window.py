@@ -372,7 +372,9 @@ class BodePage(Gtk.Box):
         side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         g = Adw.PreferencesGroup(title="Bode plot",
                                  description="Generator → DUT → scope. Scope input channel probes the DUT input, "
-                                             "output channel the DUT output. Rigol DHO over LAN (SCPI port 5555).")
+                                             "output channel the DUT output. Pick the same channel for both to "
+                                             "measure the generator's own flatness (gain vs. set amplitude). "
+                                             "Rigol DHO over LAN (SCPI port 5555).")
         self.host = Adw.EntryRow(title="Scope address", text="192.168.1.174")
         g.add(self.host)
         self.gen_ch = Adw.ComboRow(title="Generator channel", model=Gtk.StringList.new(["CH1", "CH2"]))

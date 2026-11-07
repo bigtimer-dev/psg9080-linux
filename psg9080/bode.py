@@ -81,6 +81,76 @@ class Scope:
         except ValueError:
             return float("inf")
 
+    def block(self, cmd: str) -> bytes:
+        """Query returning an IEEE-488.2 definite-length block (#<n><len><data>)."""
+        with self.lock:
+            self.sock.sendall((cmd + "\n").encode())
+            if self.f.read(1) != b"#":
+                raise ConnectionError(f"no data block for {cmd}")
+            nd = int(self.f.read(1))
+            n = int(self.f.read(nd))
+            data = self.f.read(n)
+            self.f.readline()
+            time.sleep(0.03)
+        return data
+
+    def tone(self, ch: int, freq: float) -> "Tone":
+        """Download the displayed waveform of a channel and measure the component at freq (single-bin DFT).
+
+        :MEAS:ITEM? makes this firmware's SCPI server drop the connection, so measurements are done here."""
+        self.write(f":WAV:SOUR CHAN{ch}")
+        self.write(":WAV:MODE NORM")
+        self.write(":WAV:FORM BYTE")
+        pre = [float(x) for x in self.query(":WAV:PRE?").split(",")]
+        xinc, yinc, yorg, yref = pre[4], pre[7], pre[8], pre[9]
+        raw = self.block(":WAV:DATA?")
+        return Tone.analyse(raw, xinc, yinc, yorg, yref, freq, self.qfloat(f":CHAN{ch}:SCAL?"))
+
+    def save_state(self, chans) -> dict:
+        st = {"tb": self.query(":TIM:SCAL?"), "trig": self.query(":TRIG:EDGE:SOUR?"),
+              "sweep": self.query(":TRIG:SWE?"), "chans": {}}
+        for ch in chans:
+            st["chans"][ch] = (self.query(f":CHAN{ch}:DISP?"), self.query(f":CHAN{ch}:SCAL?"))
+        return st
+
+    def restore_state(self, st: dict) -> None:
+        for ch, (disp, scale) in st["chans"].items():
+            self.write(f":CHAN{ch}:DISP 1")          # scale only sticks while the channel is shown
+            self.write(f":CHAN{ch}:SCAL {scale}")
+            self.write(f":CHAN{ch}:DISP {disp}")
+        self.write(f":TIM:SCAL {st['tb']}")
+        self.write(f":TRIG:EDGE:SOUR {st['trig']}")
+        self.write(f":TRIG:SWE {st['sweep']}")
+        self.write(":RUN")
+
+
+@dataclass
+class Tone:
+    vpp: float          # 2 x amplitude of the fundamental at the test frequency
+    phase: float        # degrees, relative to the start of the record
+    pk_pk: float        # raw min..max in volts
+    span_div: float     # raw min..max in divisions
+    clipped: bool
+
+    @staticmethod
+    def analyse(raw: bytes, xinc: float, yinc: float, yorg: float, yref: float, freq: float,
+                scale: float) -> "Tone":
+        n = len(raw)
+        if n < 16:
+            raise ValueError("waveform too short")
+        clipped = sum(1 for b in raw if b in (0, 255)) > n // 200
+        v = [(b - yorg - yref) * yinc for b in raw]
+        # use a whole number of periods (avoids leakage when the record is not an exact multiple)
+        per = 1 / (freq * xinc)
+        m = int(int(n / per) * per) if n >= per else n
+        m = max(16, m)
+        w = 2 * math.pi * freq * xinc
+        re = sum(v[i] * math.cos(w * i) for i in range(m)) * 2 / m
+        im = sum(v[i] * math.sin(w * i) for i in range(m)) * 2 / m
+        pk = max(v) - min(v)
+        return Tone(2 * math.hypot(re, im), math.degrees(math.atan2(-im, re)), pk,
+                    pk / scale if scale else 0.0, clipped)
+
 
 class BodeSweep(threading.Thread):
     def __init__(self, gen, scope: Scope, *, gen_ch: int, in_ch: int, out_ch: int, freqs: list[float],
@@ -92,6 +162,8 @@ class BodeSweep(threading.Thread):
         self.freqs, self.ampl = freqs, ampl_vpp
         self.on_point, self.on_status, self.on_done = on_point, on_status, on_done
         self.stop_evt = threading.Event()
+        self.scales: dict[int, float] = {}
+        self.settle = 0.4           # seconds of acquisition after each change before the capture
 
     # -- generator calls marshalled onto the main loop
     def _gen(self, reg: int, *vals: int, timeout: float = 5.0) -> None:
@@ -107,71 +179,81 @@ class BodeSweep(threading.Thread):
         self.stop_evt.set()
 
     # -- scope helpers
-    def _autoscale(self, ch: int) -> float:
-        """Adjust V/div until the signal spans ~2…7 divisions; return Vpp (inf if not measurable)."""
+    def _capture(self, f: float) -> dict[int, Tone]:
+        """Run, let it settle, stop, and analyse the same acquisition on both channels."""
         sc = self.scope
-        scale = sc.qfloat(f":CHAN{ch}:SCAL?")
-        vpp = float("inf")
+        chans = sorted({self.in_ch, self.out_ch})
         for _ in range(6):
-            time.sleep(0.25)
-            vpp = sc.qfloat(f":MEAS:ITEM? VPP,CHAN{ch}")
-            if vpp >= INVALID or vpp > 7.5 * scale:
-                bigger = [s for s in SCALES if s > scale]
-                if not bigger:
-                    break
-                scale = bigger[0]
-            elif vpp < 2 * scale:
-                target = vpp / 5
-                smaller = [s for s in SCALES if target <= s < scale]
-                if not smaller:
-                    break
-                scale = smaller[0]
-            else:
-                break
-            sc.write(f":CHAN{ch}:SCAL {scale:g}")
-        return vpp
+            sc.write(":RUN")
+            time.sleep(self.settle)
+            sc.write(":STOP")
+            time.sleep(0.1)
+            tones = {ch: sc.tone(ch, f) for ch in chans}
+            changed = False
+            for ch, t in tones.items():
+                scale = self.scales[ch]
+                if t.clipped:
+                    bigger = [s for s in SCALES if s > scale * 1.01]
+                    if bigger:
+                        self.scales[ch], changed = bigger[0], True
+                elif t.span_div < 2.5:
+                    target = t.pk_pk / 6
+                    smaller = [s for s in SCALES if target <= s < scale * 0.99]
+                    if smaller:
+                        self.scales[ch], changed = smaller[0], True
+                if changed and self.scales[ch] != scale:
+                    sc.write(f":CHAN{ch}:SCAL {self.scales[ch]:g}")
+            if not changed:
+                return tones
+        return tones
 
     def run(self) -> None:
         sc = self.scope
         st = self.gen.state.ch[self.gen_ch - 1]
-        saved = (st.freq_mhz, st.freq_unit, st.output, self.gen.state.ch[0].output, self.gen.state.ch[1].output)
+        saved_gen = (st.freq_mhz, st.freq_unit, st.ampl_mv, self.gen.state.ch[0].output, self.gen.state.ch[1].output)
+        saved_scope = sc.save_state({self.in_ch, self.out_ch})
         result = "Sweep finished"
         try:
             self._status("Setting up scope and generator…")
-            for ch in (self.in_ch, self.out_ch):
-                sc.write(f":CHAN{ch}:DISP ON")
+            for ch in sorted({self.in_ch, self.out_ch}):
+                sc.write(f":CHAN{ch}:DISP 1")
+                # start coarse: guaranteed not to clip, autoscale refines it
+                self.scales[ch] = min((s for s in SCALES if s >= self.ampl / 4), default=SCALES[-1])
+                sc.write(f":CHAN{ch}:SCAL {self.scales[ch]:g}")
             sc.write(f":TRIG:EDGE:SOUR CHAN{self.in_ch}")
             sc.write(":TRIG:SWE AUTO")
-            sc.write(":RUN")
             self._gen(15 + self.gen_ch - 1, P.ampl_to_reg(self.ampl))
             outs = [self.gen.state.ch[0].output, self.gen.state.ch[1].output]
             outs[self.gen_ch - 1] = True
             self._gen(10, int(outs[0]), int(outs[1]))
+            same = self.in_ch == self.out_ch
             for i, f in enumerate(self.freqs):
                 if self.stop_evt.is_set():
                     result = "Sweep stopped"
                     break
                 self._status(f"{i + 1}/{len(self.freqs)}  {P.format_freq(int(f * 1000))}")
                 self._gen(13 + self.gen_ch - 1, P.freq_to_reg(f), st.freq_unit)
-                sc.write(f":TIM:SCAL {max(5e-9, min(50.0, 2 / (f * 10))):.3e}")   # ~2 periods on screen
-                time.sleep(0.3)
-                vin = self._autoscale(self.in_ch)
-                vout = self._autoscale(self.out_ch)
-                time.sleep(0.2)
-                ph = sc.qfloat(f":MEAS:ITEM? RRPH,CHAN{self.out_ch},CHAN{self.in_ch}")
-                phase = None if abs(ph) >= INVALID or not math.isfinite(ph) else ph
-                if 0 < vin < INVALID and 0 < vout < INVALID:
-                    pt = BodePoint(f, vin, vout, 20 * math.log10(vout / vin), phase)
-                    GLib.idle_add(self.on_point, pt)
+                sc.write(f":TIM:SCAL {max(5e-9, min(50.0, 3 / (f * 10))):.3e}")   # ~3 periods on screen
+                tones = self._capture(f)
+                tin, tout = tones[self.in_ch], tones[self.out_ch]
+                vout = tout.vpp
+                vin = self.ampl if same else tin.vpp           # one channel: compare with the set amplitude
+                phase = None if same else (tout.phase - tin.phase + 180) % 360 - 180
+                if vin > 0 and vout > 0:
+                    GLib.idle_add(self.on_point, BodePoint(f, vin, vout, 20 * math.log10(vout / vin), phase))
         except Exception as e:                          # noqa: BLE001 - report any failure to the UI
             result = f"Sweep failed: {e}"
         finally:
             try:
-                # restore the generator: frequency and output states as they were before the sweep
-                self._gen(13 + self.gen_ch - 1, saved[0], saved[1])
-                self._gen(10, int(saved[3]), int(saved[4]))
+                self._gen(10, int(saved_gen[3]), int(saved_gen[4]))
+                self._gen(13 + self.gen_ch - 1, saved_gen[0], saved_gen[1])
+                self._gen(15 + self.gen_ch - 1, saved_gen[2])
             except Exception as e:                      # noqa: BLE001
-                result += f" (restore failed: {e})"
+                result += f" (generator restore failed: {e})"
+            try:
+                sc.restore_state(saved_scope)
+            except Exception as e:                      # noqa: BLE001
+                result += f" (scope restore failed: {e})"
             GLib.idle_add(self.on_done, result)
 
 
