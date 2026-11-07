@@ -358,7 +358,18 @@ class Generator:
     def _enqueue(self, data: bytes, timeout: int, cb) -> None:
         if not self.connected:
             return
-        self._q.append((data, timeout, cb))
+        if data[:2].lower() == b":r":
+            self._q.append((data, timeout, cb))
+        else:
+            # writes / uploads go ahead of queued reads (polling must not delay what the user just changed),
+            # but keep their order relative to other writes
+            i = 0
+            for i, item in enumerate(self._q):
+                if item[0][:2].lower() == b":r":
+                    break
+            else:
+                i = len(self._q)
+            self._q.insert(i, (data, timeout, cb))
         self._next()
 
     def _next(self) -> None:

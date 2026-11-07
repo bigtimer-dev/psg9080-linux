@@ -401,8 +401,14 @@ class SweepPage(Gtk.Box):
     def _on_run(self, *_a) -> None:
         if self._loading:
             return
-        v = int(self.run.get_active())
-        self.win.gen.write(65, v, v, cb=lambda: self.win.gen.read(65))
+        g = self.win.gen
+        if self.run.get_active():
+            # the generator only sweeps while its screen is in sweep mode: switch it there first
+            g.write(24, *P.SCREEN_SWEEP)
+            g.write(65, 1, 1, cb=lambda: g.read(24, 65))
+        else:
+            g.write(65, 0, 0)
+            g.write(24, *P.SCREEN_MAIN, cb=lambda: g.read(24, 65))
 
     def _on_freq(self, entry, reg: int) -> None:
         hz = parse_freq(entry.get_text())
@@ -767,7 +773,8 @@ class MainWindow(Adw.ApplicationWindow):
         if connected:
             self.gen.read(*P.INFO_REGS)
             self.gen.read(*P.POLL_REGS)
-            self.gen.read(*P.SWEEP_REGS)
+            if self.stack.get_visible_child_name() == "sweep":
+                self.sweep.refresh_now()
             if self._poll_id is None:
                 self._poll_id = GLib.timeout_add(POLL_MS, self._poll)
         for p in self.panels:

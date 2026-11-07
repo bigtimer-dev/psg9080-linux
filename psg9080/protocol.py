@@ -16,6 +16,7 @@ Sweep (verified on a scope 2026-11-07):
   64 "channel,time,direction,mode"  channel 0=CH1 1=CH2, time in 10 ms, direction 0 up 1 down 2 round trip,
                                     mode 0 linear 1 logarithmic
   65 "1,1" running / "0,0" stopped  66/67 start / end frequency in 0.1 Hz
+  24 front-panel screen: 0,1,0,1 main, 0,6,0,6 sweep. The sweep only runs while the screen is in sweep mode.
 """
 
 from __future__ import annotations
@@ -124,6 +125,8 @@ class Channel:
 SWEEP_DIRECTIONS = ["Up", "Down", "Round trip"]
 SWEEP_MODES = ["Linear", "Logarithmic"]
 SWEEP_REGS = [64, 65, 66, 67]
+SCREEN_MAIN = (0, 1, 0, 1)         # register 24 values
+SCREEN_SWEEP = (0, 6, 0, 6)
 SWEEP_TIME_MAX = 64000             # 640 s in 10 ms units
 
 

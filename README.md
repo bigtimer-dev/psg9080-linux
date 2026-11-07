@@ -42,6 +42,7 @@ Pair the Bluetooth module once: `bluetoothctl scan le`, then `pair` / `trust` it
 | 19 / 20 | duty | 0.01 % |
 | 21 / 22 | phase | 0.01 ° |
 | 25 | CH2 sync flags: waveform, frequency, amplitude, offset, duty, external | 6 × 0/1 |
+| 24 | front-panel screen (`0,1,0,1` main, `0,6,0,6` sweep; sweep only runs on the sweep screen) | |
 | 64 | sweep `channel,time,direction,mode` | ch 0/1, time 10 ms, dir 0 up / 1 down / 2 round trip, mode 0 lin / 1 log |
 | 65 | sweep running `1,1` / stopped `0,0` | |
 | 66 / 67 | sweep start / end frequency | 0.1 Hz |
