@@ -313,6 +313,7 @@ class Generator:
         self._q: deque[tuple[bytes, int, Callable | None]] = deque()
         self._busy: tuple[bytes, int, Callable | None] | None = None
         self._timer: int | None = None
+        self.last_fields: list[str] = []
         self.t.on_bytes = self._on_bytes
         self.t.on_state = self._on_link
 
@@ -350,6 +351,11 @@ class Generator:
 
     def upload_arb(self, slot: int, points: list[int], cb: Callable | None = None) -> None:
         self._enqueue(P.arb_upload_cmd(slot, points), ARB_TIMEOUT_MS, cb)
+
+    def request(self, data: bytes, cb: Callable[[list[str]], None] | None = None, long: bool = False) -> None:
+        """Send a prepared command; cb gets the reply fields (also for ':qNN=' and ':ok')."""
+        self._enqueue(data, ARB_TIMEOUT_MS if long else REPLY_TIMEOUT_MS,
+                      (lambda: cb(self.last_fields)) if cb else None)
 
     def pending(self) -> int:
         return len(self._q) + (1 if self._busy else 0)
@@ -397,6 +403,10 @@ class Generator:
             text = line.decode(errors="replace").strip()
             if text:
                 self._on_line(text)
+        # the program read (':qNN=...') ends with a bare CR
+        if self._buf.endswith(b"\r") and self._buf[:2] == b":q":
+            text, self._buf = self._buf.decode(errors="replace").strip(), b""
+            self._on_line(text)
 
     def _on_line(self, text: str) -> None:
         self.on_raw("<", text)
@@ -404,6 +414,7 @@ class Generator:
             kind, reg, fields = P.parse_reply(text)
         except P.ProtocolError:
             return                       # stray output; keep waiting for the real reply
+        self.last_fields = fields
         if kind == "r":
             try:
                 self.state.apply(reg, fields)

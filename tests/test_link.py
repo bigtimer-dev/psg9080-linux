@@ -29,6 +29,21 @@ class QueueTest(unittest.TestCase):
         self.assertEqual(queued, [b":w15=1000.\r\n", b":w16=2000.\r\n", b":r11=0.\r\n", b":r12=0.\r\n"])
         self.assertEqual(t.sent, [b":r10=0.\r\n"])
 
+    def test_program_reply_ending_in_bare_cr(self):
+        from psg9080 import protocol as P
+        t = FakeTransport()
+        g = Generator(t)
+        got = []
+        g.request(P.program_read_cmd(3), got.append, long=True)
+        vals = ["5", "10", "1", "0"] + ["0"] * 396
+        reply = (":q03=" + ",".join(vals) + ",\r").encode()
+        for i in range(0, len(reply), 20):           # BLE delivers it in pieces
+            g._on_bytes(reply[i:i + 20])
+        self.assertEqual(len(got), 1)
+        steps = P.parse_program(got[0])
+        self.assertEqual(steps[0], P.ProgramStep(5, 10, 1, 0))
+        self.assertIsNone(g._busy)
+
 
 if __name__ == "__main__":
     unittest.main()

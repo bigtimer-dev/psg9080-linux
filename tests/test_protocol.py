@@ -133,6 +133,29 @@ class ModulationTest(unittest.TestCase):
         with self.assertRaises(P.ProtocolError):
             P.write_cmd(76, 1)
 
+    def test_memory_and_program_commands(self):
+        self.assertEqual(P.memory_cmd(7, P.MEM_SAVE), b":w26=7,222.\r\n")
+        with self.assertRaises(P.ProtocolError):
+            P.memory_cmd(100, P.MEM_LOAD)
+        with self.assertRaises(P.ProtocolError):
+            P.memory_cmd(1, 444)                      # clear-all is not offered
+        steps = P.program_from_text("# comment\n00 5 10 1 0\n3 0 0 99\n")
+        self.assertEqual(steps[0], P.ProgramStep(5, 10, 1, 0))
+        self.assertEqual(steps[1], P.ProgramStep(3, 0, 0, 99))
+        cmd = P.program_write_cmd(2, steps)
+        self.assertTrue(cmd.startswith(b":p02=5,10,1,0,3,0,0,99,0,"))
+        self.assertEqual(cmd.count(b","), 399)
+        self.assertEqual(P.program_from_text(P.program_to_text(steps)), steps)
+        with self.assertRaises(P.ProtocolError):
+            P.program_from_text("1 2 3")
+        with self.assertRaises(P.ProtocolError):
+            P.program_write_cmd(20, steps)
+        self.assertEqual(P.program_control_cmd(P.PROG_RUN), b":w76=1.\r\n")
+        with self.assertRaises(P.ProtocolError):
+            P.write_cmd(76, 1)                        # the generic path stays blocked
+        txt = P.calibration_backup_text([str(i) for i in range(32)])
+        self.assertIn("0,1,2,", txt)
+
     def test_am_depth_definition(self):
         # measured on the scope: 70 % set -> 53.5 %, 100 % -> 99.7 %
         self.assertAlmostEqual(P.am_textbook_depth(0.7), 0.538, places=3)

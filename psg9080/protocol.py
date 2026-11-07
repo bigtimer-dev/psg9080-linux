@@ -94,6 +94,103 @@ def arb_upload_cmd(slot: int, points: list[int]) -> bytes:
     return f":a{slot:02d}={','.join(map(str, pts))}.\r\n".encode()
 
 
+# ---------------------------------------------------------------- memories, programs, calibration
+
+MEM_LOAD, MEM_SAVE, MEM_CLEAR = 111, 222, 333        # w26=<slot>,<action>  (444 = clear all: not offered)
+MEM_SLOTS = 100
+PROGRAMS = 20                                        # P00..P19
+PROGRAM_STEPS = 100                                  # 100 instructions x 4 bytes = 400 values
+LOOP_FOREVER = 99
+PROG_RUN, PROG_STOP = 1, 0                           # w76 (sent only through program_control_cmd)
+
+
+def memory_cmd(slot: int, action: int) -> bytes:
+    """Load / save / clear user memory M00..M99 (register 26). Load replaces all current settings."""
+    if not 0 <= slot < MEM_SLOTS:
+        raise ProtocolError("memory slot must be 0..99")
+    if action not in (MEM_LOAD, MEM_SAVE, MEM_CLEAR):
+        raise ProtocolError("unknown memory action")
+    return write_cmd(26, slot, action)
+
+
+@dataclass
+class ProgramStep:
+    memory: int = 0          # memory slot M00..M99 loaded by this instruction
+    time_s: int = 0          # run time (seconds, per the manual)
+    goto: int = 0            # instruction to continue with
+    loop: int = 0            # repeat count, 99 = forever
+
+
+def program_read_cmd(prog: int) -> bytes:
+    if not 0 <= prog < PROGRAMS:
+        raise ProtocolError("program must be 0..19")
+    return f":q{prog:02d}=0.\r\n".encode()
+
+
+def parse_program(fields: list[str]) -> list[ProgramStep]:
+    vals = [int(f) for f in fields if f.strip() != ""]
+    if len(vals) < PROGRAM_STEPS * 4:
+        raise ProtocolError(f"program reply has {len(vals)} values, expected 400")
+    return [ProgramStep(*vals[i * 4:i * 4 + 4]) for i in range(PROGRAM_STEPS)]
+
+
+def program_write_cmd(prog: int, steps: list[ProgramStep]) -> bytes:
+    if not 0 <= prog < PROGRAMS:
+        raise ProtocolError("program must be 0..19")
+    if len(steps) != PROGRAM_STEPS:
+        raise ProtocolError("a program has exactly 100 instructions")
+    vals = []
+    for i, st in enumerate(steps):
+        for name, v, hi in (("memory", st.memory, 99), ("time", st.time_s, 99), ("goto", st.goto, 99),
+                            ("loop", st.loop, 99)):
+            if not isinstance(v, int) or not 0 <= v <= hi:
+                raise ProtocolError(f"instruction {i:02d}: {name} must be 0..{hi}")
+            vals.append(v)
+    return f":p{prog:02d}={','.join(map(str, vals))}.\r\n".encode()
+
+
+def program_control_cmd(action: int) -> bytes:
+    """Start / stop Programming mode. Start loads the first instruction's memory over the live settings."""
+    if action not in (PROG_RUN, PROG_STOP):
+        raise ProtocolError("program action must be run or stop")
+    return f":w76={action}.\r\n".encode()
+
+
+def program_to_text(steps: list[ProgramStep]) -> str:
+    return "\n".join(f"{i:02d}  {s.memory:2d} {s.time_s:2d} {s.goto:2d} {s.loop:2d}" for i, s in enumerate(steps))
+
+
+def program_from_text(text: str) -> list[ProgramStep]:
+    """One line per instruction: [NN] memory time goto loop. Missing instructions are filled with zeros."""
+    steps = [ProgramStep() for _ in range(PROGRAM_STEPS)]
+    n = 0
+    for ln, line in enumerate(text.splitlines(), 1):
+        parts = line.split("#")[0].split()
+        if not parts:
+            continue
+        nums = [int(x) for x in parts] if all(x.isdigit() for x in parts) else None
+        if nums is None or len(nums) not in (4, 5):
+            raise ProtocolError(f"line {ln}: expected 'memory time goto loop' (optionally numbered)")
+        idx, vals = (nums[0], nums[1:]) if len(nums) == 5 else (n, nums)
+        if not 0 <= idx < PROGRAM_STEPS:
+            raise ProtocolError(f"line {ln}: instruction number must be 0..99")
+        steps[idx] = ProgramStep(*vals)
+        n = idx + 1
+    return steps
+
+
+CAL_WORDS = 32
+
+
+def calibration_backup_text(fields: list[str], idn: str = "") -> str:
+    """Text file for a calibration backup (r97). Restoring is deliberately not offered by the app."""
+    vals = [int(f) for f in fields]
+    if len(vals) != CAL_WORDS:
+        raise ProtocolError(f"calibration reply has {len(vals)} words, expected 32")
+    return ("# PSG9080 calibration table (register 97, 32 words), read-only backup\n"
+            + (f"# {idn}\n" if idn else "") + ",".join(str(v) for v in vals) + "\n")
+
+
 def parse_reply(line: str) -> tuple[str, int | None, list[str]]:
     """Return ('ok', None, []) or (letter, reg, fields), e.g. ('r', 13, [...]) or ('b', 99, [2048 values])."""
     m = _REPLY.match(line.strip())

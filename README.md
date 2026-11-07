@@ -19,6 +19,9 @@ two-channel signal generator. Talks to it over the **BSG145 Bluetooth LE module*
   frequency; shows the generator's AM depth as the textbook depth too (they differ, see below).
 - **Measure** tab: frequency, period, pulse widths and duty of a signal on EXT IN (1 Hz – 100 MHz, 2 – 20 Vpp), and
   the live count in counter mode (start/stop counting on the panel).
+- **Memory** tab: load / save / clear the generator's memories M00–M99 (M00 is loaded at power-on), read, edit
+  and write Programming-mode programs P00–P19 and run or stop them, and save a read-only backup of the
+  generator's calibration table.
 - Console for raw commands, with `w76` (starts Programming mode, which replaces the current settings with memory M00) and the calibration / flash
   commands (`w97`, `w98`) blocked.
 
@@ -67,6 +70,9 @@ Pair the Bluetooth module once: `bluetoothctl scan le`, then `pair` / `trust` it
 | 83 / 84 | measured positive / negative pulse width | ns |
 | 85 | measured period | ns |
 | 86 | measured duty cycle | 0.01 % |
+| 26 | memory command `slot,action`: 111 load, 222 save, 333 clear (M00–M99) | |
+| `:qNN` / `:pNN` | read / write Programming-mode program NN (0–19): 100 × `memory,time,goto,loop` (loop 99 = forever); reading also makes it the current program | |
+| 97 | read: calibration table (32 values). Writing is blocked in the app | |
 | 76 | Programming-mode run: `1` starts program P00, which loads memory M00 over the current settings (blocked in the app) | |
 | 74 | write `1,0,0,0` = fire one burst (same as the Trig. key) | one-shot |
 | 64 | sweep `channel,time,direction,mode` | ch 0/1, time 10 ms, dir 0 up / 1 down / 2 round trip, mode 0 lin / 1 log |

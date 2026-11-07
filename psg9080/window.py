@@ -877,6 +877,180 @@ class MeasurePage(Gtk.Box):
         g.write(24, *screen, cb=lambda: g.read(*P.MEAS_REGS))
 
 
+class MemoryPage(Gtk.Box):
+    """User memories M00..M99 (w26), Programming-mode programs P00..P19 (p/q, w76) and a calibration backup (r97)."""
+
+    def __init__(self, win: "MainWindow") -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        self.win = win
+        self.steps: list[P.ProgramStep] | None = None
+        clamp = Adw.Clamp(maximum_size=760, margin_top=12, margin_bottom=12, margin_start=12, margin_end=12)
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
+        clamp.set_child(page)
+        self.append(Gtk.ScrolledWindow(child=clamp, vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER))
+
+        g = Adw.PreferencesGroup(title="Memories M00 – M99",
+                                 description="The generator loads M00 at power-on. Loading a memory replaces all "
+                                             "current settings of both channels.")
+        self.mem = Adw.SpinRow.new_with_range(0, 99, 1)
+        self.mem.set_title("Memory")
+        g.add(self.mem)
+        row = Adw.ActionRow(title="Action")
+        box = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
+        for label, action, style in (("Load", P.MEM_LOAD, None), ("Save", P.MEM_SAVE, "suggested-action"),
+                                     ("Clear", P.MEM_CLEAR, "destructive-action")):
+            b = Gtk.Button(label=label, css_classes=[style] if style else [])
+            b.connect("clicked", self._on_mem, action)
+            box.append(b)
+        row.add_suffix(box)
+        g.add(row)
+        page.append(g)
+
+        g = Adw.PreferencesGroup(title="Programs P00 – P19",
+                                 description="Programming mode runs a list of instructions; each loads a memory, "
+                                             "keeps it for a time, then jumps (Go to) and repeats (Loop, 99 = "
+                                             "forever). One line per instruction: number memory time goto loop.")
+        self.prog = Adw.SpinRow.new_with_range(0, P.PROGRAMS - 1, 1)
+        self.prog.set_title("Program")
+        g.add(self.prog)
+        row = Adw.ActionRow(title="Program")
+        box = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
+        self.read_btn = Gtk.Button(label="Read")
+        self.read_btn.connect("clicked", self._on_prog_read)
+        self.write_btn = Gtk.Button(label="Write", sensitive=False, css_classes=["suggested-action"])
+        self.write_btn.connect("clicked", self._on_prog_write)
+        self.run_btn = Gtk.Button(label="Run P00…", css_classes=["destructive-action"])
+        self.run_btn.connect("clicked", self._on_prog_run)
+        stop = Gtk.Button(label="Stop")
+        stop.connect("clicked", lambda _b: self.win.gen.request(P.program_control_cmd(P.PROG_STOP)))
+        for b in (self.read_btn, self.write_btn, self.run_btn, stop):
+            box.append(b)
+        row.add_suffix(box)
+        g.add(row)
+        page.append(g)
+        self.text = Gtk.TextView(monospace=True, top_margin=6, bottom_margin=6, left_margin=8, right_margin=8)
+        self.text.get_buffer().set_text("Press Read to load a program from the generator.")
+        sw = Gtk.ScrolledWindow(child=self.text, min_content_height=260, css_classes=["card"])
+        page.append(sw)
+
+        g = Adw.PreferencesGroup(title="Calibration",
+                                 description="Saves the generator's factory calibration table (32 values) to a "
+                                             "file. Read-only: the app never writes calibration.")
+        row = Adw.ActionRow(title="Calibration backup")
+        b = Gtk.Button(label="Save backup…", valign=Gtk.Align.CENTER)
+        b.connect("clicked", self._on_cal)
+        row.add_suffix(b)
+        g.add(row)
+        page.append(g)
+        self.prog.connect("notify::value", lambda *_: self.run_btn.set_label(f"Run P{self._prog():02d}…"))
+
+    def _prog(self) -> int:
+        return int(self.prog.get_value())
+
+    def _ready(self) -> bool:
+        if not self.win.gen.connected:
+            self.win.toast("Generator not connected")
+            return False
+        return True
+
+    def _confirm(self, heading: str, body: str, label: str, then) -> None:
+        dlg = Adw.AlertDialog(heading=heading, body=body)
+        dlg.add_response("cancel", "Cancel")
+        dlg.add_response("ok", label)
+        dlg.set_response_appearance("ok", Adw.ResponseAppearance.DESTRUCTIVE)
+        dlg.connect("response", lambda _d, r: r == "ok" and then())
+        dlg.present(self.win)
+
+    # -- memories
+    def _on_mem(self, _b, action: int) -> None:
+        if not self._ready():
+            return
+        slot = int(self.mem.get_value())
+        g = self.win.gen
+        text = {P.MEM_LOAD: ("Load M%02d?", "All current settings of both channels are replaced by this memory.",
+                             "Load"),
+                P.MEM_SAVE: ("Save to M%02d?", "Overwrites what is stored in this memory." +
+                             (" M00 is what the generator loads at power-on." if slot == 0 else ""), "Save"),
+                P.MEM_CLEAR: ("Clear M%02d?", "The stored settings in this memory are erased.", "Clear")}[action]
+
+        def go():
+            done = {P.MEM_LOAD: f"Loaded M{slot:02d}", P.MEM_SAVE: f"Saved M{slot:02d}",
+                    P.MEM_CLEAR: f"Cleared M{slot:02d}"}[action]
+            g.request(P.memory_cmd(slot, action), lambda _f: (self.win.toast(done),
+                                                                action == P.MEM_LOAD and g.read(*P.POLL_REGS)))
+        self._confirm(text[0] % slot, text[1], text[2], go)
+
+    # -- programs
+    def _on_prog_read(self, _b) -> None:
+        if not self._ready():
+            return
+        n = self._prog()
+        self.read_btn.set_sensitive(False)
+
+        def got(fields):
+            self.read_btn.set_sensitive(True)
+            try:
+                self.steps = P.parse_program(fields)
+            except (P.ProtocolError, ValueError) as e:
+                self.win.toast(f"P{n:02d}: {e}")
+                return
+            self.text.get_buffer().set_text(f"# P{n:02d}  memory time goto loop\n" + P.program_to_text(self.steps))
+            self.write_btn.set_sensitive(True)
+        self.win.gen.request(P.program_read_cmd(n), got, long=True)
+
+    def _on_prog_write(self, _b) -> None:
+        if not self._ready():
+            return
+        buf = self.text.get_buffer()
+        try:
+            steps = P.program_from_text(buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False))
+            cmd = P.program_write_cmd(self._prog(), steps)
+        except (P.ProtocolError, ValueError) as e:
+            self.win.toast(str(e))
+            return
+        n = self._prog()
+        self._confirm(f"Write P{n:02d}?", "Overwrites this program in the generator.", "Write",
+                      lambda: self.win.gen.request(cmd, lambda _f: self.win.toast(f"Wrote P{n:02d}"), long=True))
+
+    def _on_prog_run(self, _b) -> None:
+        if not self._ready():
+            return
+        n = self._prog()
+        g = self.win.gen
+
+        def run():
+            # reading Pnn makes it the generator's current program; w76=1 then starts it
+            g.request(P.program_read_cmd(n), lambda _f: g.request(P.program_control_cmd(P.PROG_RUN),
+                                                                  lambda _f2: g.read(*P.POLL_REGS)), long=True)
+        self._confirm(f"Run P{n:02d}?",
+                      "Each instruction loads a memory, which replaces the current settings of both channels; the "
+                      "outputs follow what is stored in those memories. Use Stop to end it.", "Run", run)
+
+    # -- calibration
+    def _on_cal(self, _b) -> None:
+        if not self._ready():
+            return
+
+        def got(fields):
+            try:
+                text = P.calibration_backup_text(fields, self.win.gen.state.model and
+                                                 f"model {self.win.gen.state.model}" or "")
+            except (P.ProtocolError, ValueError) as e:
+                self.win.toast(str(e))
+                return
+            dlg = Gtk.FileDialog(initial_name="psg9080-calibration.txt")
+
+            def done(d, res):
+                try:
+                    f = d.save_finish(res)
+                except GLib.Error:
+                    return
+                f.replace_contents(text.encode(), None, False, 0, None)
+                self.win.toast(f"Saved {f.get_basename()}")
+            dlg.save(self.win, None, done)
+        self.win.gen.request(P.read_cmd(97), got)
+
+
 class ConsolePage(Gtk.Box):
     def __init__(self, win: "MainWindow") -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8,
@@ -1142,6 +1316,8 @@ class MainWindow(Adw.ApplicationWindow):
         self.stack.add_titled_with_icon(self.mod, "mod", "Modulation", "network-wireless-signal-good-symbolic")
         self.meas = MeasurePage(self)
         self.stack.add_titled_with_icon(self.meas, "meas", "Measure", "speedometer-symbolic")
+        self.memory = MemoryPage(self)
+        self.stack.add_titled_with_icon(self.memory, "memory", "Memory", "document-save-symbolic")
         self.bode = BodePage(self)
         self.stack.add_titled_with_icon(self.bode, "bode", "Bode", "utilities-system-monitor-symbolic")
         self.console = ConsolePage(self)
