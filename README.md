@@ -15,7 +15,7 @@ two-channel signal generator. Talks to it over the **BSG145 Bluetooth LE module*
   ~10 s), which is why the app never uses it.
 - **Sweep** of frequency, amplitude or duty cycle: channel, start/end value, time (10 ms … 640 s), up / down / round trip, linear / log,
   start/stop, with a frequency-vs-time preview.
-- **Modulation**: AM, FM, PM, ASK, FSK, PSK, pulse mode ("PWM": exact pulse width / period / invert) and burst (pulse count, trigger source, Trigger button) with modulation frequency, depth, FM/PM deviation and FSK hop
+- **Modulation**: internal (sine / square / triangle / ramp) or external (MOD input) source; AM, FM, PM, ASK, FSK, PSK, pulse mode ("PWM": exact pulse width / period / invert) and burst (pulse count, trigger source, Trigger button) with modulation frequency, depth, FM/PM deviation and FSK hop
   frequency; shows the generator's AM depth as the textbook depth too (they differ, see below).
 - **Measure** tab: frequency, period, pulse widths and duty of a signal on EXT IN (1 Hz – 100 MHz, 2 – 20 Vpp), and
   the live count in counter mode (start/stop counting on the panel).
@@ -49,6 +49,8 @@ Pair the Bluetooth module once: `bluetoothctl scan le`, then `pair` / `trust` it
 | 25 | CH2 sync flags: waveform, frequency, amplitude, offset, duty, external | 6 × 0/1 |
 | 24 | front-panel screen: `0,1,0,1` main, `0,6,X,6` sweep (X = 0 frequency, 1 amplitude, 2 duty), `0,1,0,12` modulation, `0,1,0,8` pulse ("PWM") | sweep/modulation only run on their screen |
 | 40 | modulation type `ch1,ch2` | 0 AM, 1 FM, 2 PM, 3 ASK, 4 FSK, 5 PSK, 6 PWM, 7 Burst |
+| 41 | internal modulating shape `ch1,ch2` | 0 sine, 1 square, 2 triangle, 3 ramp |
+| 42 | modulation source `ch1,ch2` | 0 internal, 1 external (MOD input) |
 | 43 / 44 | modulation frequency | mHz |
 | 45 / 46 | AM depth (also ASK low level) | 0.1 % |
 | 47 / 48 | FM deviation | 0.1 Hz |
@@ -75,7 +77,7 @@ Pair the Bluetooth module once: `bluetoothctl scan le`, then `pair` / `trust` it
 
 Sweep and modulation registers were verified by measuring the output with a scope (spectrum / envelope /
 instantaneous frequency). AM depth: the generator's depth m makes the envelope run from the set amplitude down to
-(1 − m) of it, so the textbook depth (max − min)/(max + min) is m / (2 − m): 70 % set = 53.8 %. The external modulation input (MOD) and starting the counter remotely are not mapped yet.
+(1 − m) of it, so the textbook depth (max − min)/(max + min) is m / (2 − m): 70 % set = 53.8 %. Starting the counter remotely is not mapped (use the panel's ON key).
 
 ## Tests
 

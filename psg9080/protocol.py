@@ -21,6 +21,8 @@ Sweep (verified on a scope 2026-11-07):
      screen shows them.
 Modulation (verified on a scope 2026-11-07; odd register = CH1, even = CH2):
   40 type "ch1,ch2": 0 AM 1 FM 2 PM 3 ASK 4 FSK 5 PSK 6 PWM 7 Burst
+  41 internal source shape "ch1,ch2": 0 sine 1 square 2 triangle 3 ramp (4..9 unmapped)
+  42 source "ch1,ch2": 0 internal, 1 external (MOD input, -5..+5 V, 0..20 kHz)
   43/44 modulation frequency in mHz      45/46 AM depth in 0.1 % (also the ASK low level)
   47/48 FM deviation in 0.1 Hz           49/50 FSK hop frequency in 0.1 Hz
   51/52 PM deviation in 0.1 deg peak-to-peak
@@ -153,7 +155,9 @@ SCREEN_MOD = (0, 1, 0, 12)
 SCREEN_PWM = (0, 1, 0, 8)
 
 MOD_TYPES = ["AM", "FM", "PM", "ASK", "FSK", "PSK", "PWM", "Burst"]
-MOD_REGS = [24, 40] + list(range(43, 59)) + [60, 61]
+MOD_REGS = [24, 40, 41, 42] + list(range(43, 59)) + [60, 61]
+MOD_SHAPES = ["Sine", "Square", "Triangle", "Ramp"]
+MOD_SOURCES = ["Internal", "External (MOD input)"]
 BURST_IDLE = ["Zero", "Positive maximum", "Negative maximum"]
 BURST_SOURCES = ["Button / app", "Internal", "External AC", "External DC"]
 BURST_MAX = 100_000_000
@@ -168,6 +172,8 @@ class Modulation:
     fm_dev_dhz: int = 10000        # FM deviation, 0.1 Hz
     hop_dhz: int = 20000           # FSK hop frequency, 0.1 Hz
     pm_dev: int = 1800             # PM deviation, 0.1 deg peak-to-peak
+    shape: int = 0                 # internal source shape
+    external: bool = False
     burst_count: int = 1
     burst_source: int = 0
     burst_idle: int = 0
@@ -272,6 +278,10 @@ class DeviceState:
                 setattr(self.sweep, attr, int(f[0]))
             elif reg == 40:
                 self.mod[0].type, self.mod[1].type = int(f[0]), int(f[1])
+            elif reg == 41:
+                self.mod[0].shape, self.mod[1].shape = int(f[0]), int(f[1])
+            elif reg == 42:
+                self.mod[0].external, self.mod[1].external = f[0] == "1", f[1] == "1"
             elif reg in (53, 54):
                 self.mod[reg - 53].pulse_width_ns = int(f[0])
             elif reg in (55, 56):

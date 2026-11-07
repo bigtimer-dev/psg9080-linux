@@ -556,6 +556,12 @@ class ModPage(Gtk.Box):
         self.type = Adw.ComboRow(title="Type", model=Gtk.StringList.new(P.MOD_TYPES[:6] + ["Pulse (PWM)", "Burst"]))
         self.type.connect("notify::selected", self._on_type)
         g.add(self.type)
+        self.source = Adw.ComboRow(title="Source", model=Gtk.StringList.new(P.MOD_SOURCES))
+        self.source.connect("notify::selected", self._on_pair, 42, "source")
+        g.add(self.source)
+        self.shape = Adw.ComboRow(title="Modulating shape", model=Gtk.StringList.new(P.MOD_SHAPES))
+        self.shape.connect("notify::selected", self._on_pair, 41, "shape")
+        g.add(self.shape)
         page.append(g)
 
         p = Adw.PreferencesGroup(title="Parameters")
@@ -622,6 +628,8 @@ class ModPage(Gtk.Box):
                 self.burst_count.set_value(max(1, m.burst_count))
             self.burst_src.set_selected(min(m.burst_source, 3))
             self.burst_idle.set_selected(min(m.burst_idle, 2))
+            self.source.set_selected(int(m.external))
+            self.shape.set_selected(min(m.shape, 3))
             if not self.p_width.has_focus():
                 self.p_width.set_text(f"{m.pulse_width_ns / 1000:g}")
             if not self.p_period.has_focus():
@@ -643,7 +651,10 @@ class ModPage(Gtk.Box):
             row.set_visible(m.type == 7)
         for row in (self.p_width, self.p_period, self.p_inv):
             row.set_visible(m.type == 6)
-        self.freq.set_visible(m.type != 6)
+        analog = m.type < 6
+        self.source.set_visible(analog)
+        self.shape.set_visible(analog and not m.external)
+        self.freq.set_visible(analog and not m.external or m.type == 7)
         self.trig_row.set_visible(m.type == 7 and m.burst_source == 0)
         notes = {0: f"Generator depth {m.depth / 10:g} % = textbook depth "
                     f"{P.am_textbook_depth(m.depth / 1000) * 100:.1f} %: the envelope runs from the set amplitude "
@@ -655,7 +666,10 @@ class ModPage(Gtk.Box):
                     f"duty {m.pulse_width_ns / max(1, m.pulse_period_10ns * 10) * 100:.2f} %. Uses its own screen.",
                  7: "Burst outputs the set number of carrier cycles per trigger. Internal trigger repeats at the "
                     "modulation frequency rate; keep the burst shorter than the trigger period."}
-        self.note.set_label(notes.get(m.type, f"{name}: set its parameters on the front panel for now."))
+        note = notes.get(m.type, f"{name}: set its parameters on the front panel for now.")
+        if analog and m.external:
+            note += " External source: feed the modulating signal into MOD (−5 … +5 V, 0 … 20 kHz)."
+        self.note.set_label(note)
 
     # -- UI -> device
     def _write(self, base: int, value: int) -> None:
@@ -699,6 +713,15 @@ class ModPage(Gtk.Box):
         srcs = [m.burst_source for m in self.win.gen.state.mod]
         srcs[self.ch] = self.burst_src.get_selected()
         self.win.gen.write(60, *srcs, cb=lambda: self.win.gen.read(60))
+
+    def _on_pair(self, row, _pspec, reg: int, attr: str) -> None:
+        """Registers holding one value per channel ("ch1,ch2")."""
+        if self._loading:
+            return
+        mods = self.win.gen.state.mod
+        vals = [int(m.external) if attr == "source" else m.shape for m in mods]
+        vals[self.ch] = row.get_selected()
+        self.win.gen.write(reg, *vals, cb=lambda: self.win.gen.read(reg))
 
     def _on_p_width(self, row) -> None:
         v = self._number(row, 0.001, 4_000_000)

@@ -94,6 +94,10 @@ class ModulationTest(unittest.TestCase):
             _, reg, fields = P.parse_reply(line)
             st.apply(reg, fields)
         self.assertEqual(st.screen, P.SCREEN_MOD)
+        for line in (":r41=2,0.", ":r42=1,0."):
+            _, reg, fields = P.parse_reply(line)
+            st.apply(reg, fields)
+        self.assertEqual((st.mod[0].shape, st.mod[0].external, st.mod[1].external), (2, True, False))
         m1, m2 = st.mod
         self.assertEqual((m1.type, m1.freq_mhz, m1.depth, m1.fm_dev_dhz), (0, 300000, 700, 20000))
         self.assertEqual((m2.hop_dhz, m2.pm_dev), (50000, 1800))
