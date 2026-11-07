@@ -43,7 +43,7 @@ class App(Adw.Application):
         self.add_main_option("usb", ord("u"), GLib.OptionFlags.NONE, GLib.OptionArg.NONE,
                              "Use the first USB serial port found", None)
         self.add_main_option("page", 0, GLib.OptionFlags.NONE, GLib.OptionArg.STRING,
-                             "Open on page: channels, arb, sweep, mod, bode or console", "PAGE")
+                             "Open on page: channels, arb, sweep, mod, meas, bode or console", "PAGE")
         self.opts: dict = {}
         GLib.set_application_name("PSG9080")
 
@@ -71,7 +71,7 @@ class App(Adw.Application):
                      else BleTransport(self.opts.get("ble")))
         gen = Generator(transport)
         win = MainWindow(self, gen)
-        if self.opts.get("page") in ("channels", "arb", "sweep", "mod", "bode", "console"):
+        if self.opts.get("page") in ("channels", "arb", "sweep", "mod", "meas", "bode", "console"):
             win.stack.set_visible_child_name(self.opts["page"])
         win.present()
         GLib.idle_add(lambda: (gen.open(), False)[1])

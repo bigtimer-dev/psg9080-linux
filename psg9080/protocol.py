@@ -27,6 +27,9 @@ Modulation (verified on a scope 2026-11-07; odd register = CH1, even = CH2):
   Burst: 61 pulse count "ch1,ch2" (1..100000000); 60 trigger source "ch1,ch2" 0 button 1 internal (2 ext AC,
   3 ext DC per firmware range); w74=1,0,0,0 fires a manual burst (one-shot); 58 idle level "ch1,ch2"
   0 zero 1 +max 2 -max.
+Measurement input EXT IN (verified 2026-11-07): screen 0,4,0,1 measure, 0,5,0,2 counter (counting is started with
+  the panel's ON key). 80 count, 81 frequency Hz, 83/84 positive/negative width ns, 85 period ns, 86 duty 0.01 %.
+  Values freeze when the screen is left. Never write 76: it switches to another mode and turns the outputs off.
   "PWM" (type 6) is a precision pulse generator on its own screen 0,1,0,8: 53/54 pulse width in 1 ns,
   55/56 period in 10 ns, 57 "ch1,ch2" inverted output.
   AM "depth" m: the envelope runs from the set amplitude down to (1-m) of it; textbook depth = m/(2-m).
@@ -55,7 +58,8 @@ DUTY_MAX = 9999
 PHASE_MOD = 36000
 
 # Registers that change calibration or rewrite internal flash / reboot: never sent by this app.
-FORBIDDEN_WRITES = {97, 98}
+# 76 switches the panel to another mode and turns the outputs off (seen 2026-11-07).
+FORBIDDEN_WRITES = {76, 97, 98}
 
 _REPLY = re.compile(r"^:(?:([a-zA-Z])(\d\d)=(.*?)\.?|(ok))$")
 
@@ -172,6 +176,21 @@ class Modulation:
     pulse_inverted: bool = False
 
 
+SCREEN_MEASURE = (0, 4, 0, 1)
+SCREEN_COUNTER = (0, 5, 0, 2)
+MEAS_REGS = [24, 80, 81, 83, 84, 85, 86]
+
+
+@dataclass
+class Measurement:
+    count: int = 0
+    freq_hz: int = 0
+    pos_width_ns: int = 0
+    neg_width_ns: int = 0
+    period_ns: int = 0
+    duty: int = 0                  # 0.01 %
+
+
 def mod_screen(mod_type: int) -> tuple[int, ...]:
     return SCREEN_PWM if mod_type == 6 else SCREEN_MOD
 
@@ -215,6 +234,7 @@ class DeviceState:
     sweep: Sweep = field(default_factory=Sweep)
     mod: list[Modulation] = field(default_factory=lambda: [Modulation(), Modulation()])
     screen: tuple[int, ...] = ()
+    meas: Measurement = field(default_factory=Measurement)
 
     def apply(self, reg: int, fields: list[str]) -> None:
         f = [x.strip() for x in fields]
@@ -243,6 +263,10 @@ class DeviceState:
                 self.ch[reg - 21].phase_reg = int(f[0])
             elif reg == 24:
                 self.screen = tuple(int(x) for x in f)
+            elif reg in (80, 81, 83, 84, 85, 86):
+                attr = {80: "count", 81: "freq_hz", 83: "pos_width_ns", 84: "neg_width_ns", 85: "period_ns",
+                        86: "duty"}[reg]
+                setattr(self.meas, attr, int(f[0]))
             elif reg in (68, 69, 70, 71):
                 attr = ("start_mv", "end_mv", "start_duty", "end_duty")[reg - 68]
                 setattr(self.sweep, attr, int(f[0]))

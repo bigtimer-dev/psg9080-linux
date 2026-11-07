@@ -17,7 +17,10 @@ two-channel signal generator. Talks to it over the **BSG145 Bluetooth LE module*
   start/stop, with a frequency-vs-time preview.
 - **Modulation**: AM, FM, PM, ASK, FSK, PSK, pulse mode ("PWM": exact pulse width / period / invert) and burst (pulse count, trigger source, Trigger button) with modulation frequency, depth, FM/PM deviation and FSK hop
   frequency; shows the generator's AM depth as the textbook depth too (they differ, see below).
-- Console for raw commands, with the calibration / flash commands (`w97`, `w98`) blocked.
+- **Measure** tab: frequency, period, pulse widths and duty of a signal on EXT IN (1 Hz – 100 MHz, 2 – 20 Vpp), and
+  the live count in counter mode (start/stop counting on the panel).
+- Console for raw commands, with `w76` (resets all settings to factory defaults) and the calibration / flash
+  commands (`w97`, `w98`) blocked.
 
 ## Install
 
@@ -57,6 +60,12 @@ Pair the Bluetooth module once: `bluetoothctl scan le`, then `pair` / `trust` it
 | 57 | pulse ("PWM") inverted `ch1,ch2` | 0/1 |
 | 58 | burst idle level `ch1,ch2` | 0 zero, 1 +max, 2 −max |
 | 61 | burst pulse count `ch1,ch2` | 1 … 100000000 |
+| 80 | counter value (counter screen `0,5,0,2`) | |
+| 81 | measured frequency (measure screen `0,4,0,1`) | Hz |
+| 83 / 84 | measured positive / negative pulse width | ns |
+| 85 | measured period | ns |
+| 86 | measured duty cycle | 0.01 % |
+| 76 | **do not write**: `1` resets all settings to factory defaults (blocked in the app) | |
 | 74 | write `1,0,0,0` = fire one burst (same as the Trig. key) | one-shot |
 | 64 | sweep `channel,time,direction,mode` | ch 0/1, time 10 ms, dir 0 up / 1 down / 2 round trip, mode 0 lin / 1 log |
 | 65 | sweep running `1,1` / stopped `0,0` | |
@@ -66,7 +75,7 @@ Pair the Bluetooth module once: `bluetoothctl scan le`, then `pair` / `trust` it
 
 Sweep and modulation registers were verified by measuring the output with a scope (spectrum / envelope /
 instantaneous frequency). AM depth: the generator's depth m makes the envelope run from the set amplitude down to
-(1 − m) of it, so the textbook depth (max − min)/(max + min) is m / (2 − m): 70 % set = 53.8 %. External modulation input and the measurement/counter mode are not mapped yet.
+(1 − m) of it, so the textbook depth (max − min)/(max + min) is m / (2 − m): 70 % set = 53.8 %. The external modulation input (MOD) and starting the counter remotely are not mapped yet.
 
 ## Tests
 

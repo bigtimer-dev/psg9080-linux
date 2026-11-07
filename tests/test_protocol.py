@@ -117,6 +117,18 @@ class ModulationTest(unittest.TestCase):
         self.assertEqual(st.screen, P.mod_screen(6))
         self.assertEqual(P.mod_screen(0), P.SCREEN_MOD)
 
+    def test_measurement(self):
+        st = P.DeviceState()
+        for line in (":r24=00,04,00,01.", ":r81=0000001234.", ":r83=0000202558.", ":r84=0000607485.",
+                     ":r85=0000810044.", ":r86=2500.", ":r80=0000049463."):
+            _, reg, fields = P.parse_reply(line)
+            st.apply(reg, fields)
+        m = st.meas
+        self.assertEqual((m.freq_hz, m.period_ns, m.duty, m.count), (1234, 810044, 2500, 49463))
+        self.assertEqual(st.screen, P.SCREEN_MEASURE)
+        with self.assertRaises(P.ProtocolError):
+            P.write_cmd(76, 1)
+
     def test_am_depth_definition(self):
         # measured on the scope: 70 % set -> 53.5 %, 100 % -> 99.7 %
         self.assertAlmostEqual(P.am_textbook_depth(0.7), 0.538, places=3)

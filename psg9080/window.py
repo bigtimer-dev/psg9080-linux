@@ -772,6 +772,88 @@ class ModPage(Gtk.Box):
             self._write(51, int(round(v * 10)))
 
 
+def _fmt_ns(ns: int) -> str:
+    for div, unit in ((1e9, "s"), (1e6, "ms"), (1e3, "µs")):
+        if ns >= div:
+            return f"{ns / div:.6g} {unit}"
+    return f"{ns} ns"
+
+
+class MeasurePage(Gtk.Box):
+    """Frequency meter / counter on the EXT IN input (registers 80-86)."""
+
+    def __init__(self, win: "MainWindow") -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12,
+                         margin_top=12, margin_bottom=12, margin_start=12, margin_end=12)
+        self.win = win
+        self._loading = False
+        clamp = Adw.Clamp(maximum_size=640)
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        clamp.set_child(page)
+        self.append(clamp)
+        g = Adw.PreferencesGroup(title="EXT IN measurement",
+                                 description="Signal into EXT IN: 1 Hz – 100 MHz, 2 – 20 Vpp. Gate time and coupling "
+                                             "are set on the panel.")
+        self.mode = Adw.ComboRow(title="Mode", model=Gtk.StringList.new(["Off", "Measure", "Counter"]))
+        self.mode.connect("notify::selected", self._on_mode)
+        g.add(self.mode)
+        page.append(g)
+        self.big = Gtk.Label(label="—", css_classes=["freq-big"], xalign=0.5)
+        page.append(self.big)
+        self.rows = {}
+        r = Adw.PreferencesGroup()
+        for key, title in (("period", "Period"), ("pos", "Positive width"), ("neg", "Negative width"),
+                           ("duty", "Duty cycle"), ("count", "Count")):
+            row = Adw.ActionRow(title=title)
+            lab = Gtk.Label(label="—", css_classes=["sub-readout"])
+            row.add_suffix(lab)
+            r.add(row)
+            self.rows[key] = (row, lab)
+        page.append(r)
+        self.note = Gtk.Label(xalign=0, wrap=True, css_classes=["dim-label", "caption"])
+        page.append(self.note)
+        self.connect("map", lambda *_: self.refresh_now())
+
+    def refresh_now(self) -> None:
+        if self.win.gen.connected:
+            self.win.gen.read(*P.MEAS_REGS)
+
+    def refresh(self) -> None:
+        st = self.win.gen.state
+        m = st.meas
+        mode = 1 if st.screen == P.SCREEN_MEASURE else 2 if st.screen == P.SCREEN_COUNTER else 0
+        self._loading = True
+        try:
+            self.mode.set_selected(mode)
+        finally:
+            self._loading = False
+        for key in ("period", "pos", "neg", "duty"):
+            self.rows[key][0].set_visible(mode == 1)
+        self.rows["count"][0].set_visible(mode == 2)
+        if mode == 1:
+            self.big.set_label(P.format_freq(m.freq_hz * 1000) if m.freq_hz else "no signal")
+            self.rows["period"][1].set_label(_fmt_ns(m.period_ns))
+            self.rows["pos"][1].set_label(_fmt_ns(m.pos_width_ns))
+            self.rows["neg"][1].set_label(_fmt_ns(m.neg_width_ns))
+            self.rows["duty"][1].set_label(f"{m.duty / 100:.2f} %")
+            self.note.set_label("Frequency has 1 Hz resolution; the period is the more precise reading "
+                                "(f = 1 / period).")
+        elif mode == 2:
+            self.big.set_label(f"{m.count:,}".replace(",", " "))
+            self.rows["count"][1].set_label(f"{m.count}")
+            self.note.set_label("Start / stop / reset counting with ON, OFF and RST on the panel.")
+        else:
+            self.big.set_label("—")
+            self.note.set_label("")
+
+    def _on_mode(self, *_a) -> None:
+        if self._loading:
+            return
+        screen = (P.SCREEN_MAIN, P.SCREEN_MEASURE, P.SCREEN_COUNTER)[self.mode.get_selected()]
+        g = self.win.gen
+        g.write(24, *screen, cb=lambda: g.read(*P.MEAS_REGS))
+
+
 class ConsolePage(Gtk.Box):
     def __init__(self, win: "MainWindow") -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8,
@@ -1035,6 +1117,8 @@ class MainWindow(Adw.ApplicationWindow):
         self.stack.add_titled_with_icon(self.sweep, "sweep", "Sweep", "media-seek-forward-symbolic")
         self.mod = ModPage(self)
         self.stack.add_titled_with_icon(self.mod, "mod", "Modulation", "network-wireless-signal-good-symbolic")
+        self.meas = MeasurePage(self)
+        self.stack.add_titled_with_icon(self.meas, "meas", "Measure", "speedometer-symbolic")
         self.bode = BodePage(self)
         self.stack.add_titled_with_icon(self.bode, "bode", "Bode", "utilities-system-monitor-symbolic")
         self.console = ConsolePage(self)
@@ -1062,6 +1146,7 @@ class MainWindow(Adw.ApplicationWindow):
             p.refresh()
         self.sweep.refresh()
         self.mod.refresh()
+        self.meas.refresh()
         s = self.gen.state
         if s.model:
             self.info_label.set_label(f"PSG90{s.model}  ·  S/N {s.serial}  ·  versions {s.versions}")
@@ -1076,6 +1161,8 @@ class MainWindow(Adw.ApplicationWindow):
                 self.sweep.refresh_now()
             elif page == "mod":
                 self.mod.refresh_now()
+            elif page == "meas":
+                self.meas.refresh_now()
             if self._poll_id is None:
                 self._poll_id = GLib.timeout_add(POLL_MS, self._poll)
         for p in self.panels:
@@ -1089,6 +1176,8 @@ class MainWindow(Adw.ApplicationWindow):
                 self.gen.read(*P.SWEEP_REGS)
             elif page == "mod":
                 self.gen.read(*P.MOD_REGS)
+            elif page == "meas":
+                self.gen.read(*P.MEAS_REGS)
         return True
 
     def _on_close(self, *_a) -> bool:
