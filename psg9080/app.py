@@ -71,7 +71,7 @@ class App(Adw.Application):
                      else BleTransport(self.opts.get("ble")))
         gen = Generator(transport)
         win = MainWindow(self, gen)
-        if self.opts.get("page") in ("channels", "arb", "console"):
+        if self.opts.get("page") in ("channels", "arb", "bode", "console"):
             win.stack.set_visible_child_name(self.opts["page"])
         win.present()
         GLib.idle_add(lambda: (gen.open(), False)[1])

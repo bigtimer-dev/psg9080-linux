@@ -11,6 +11,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
+from . import bode as B  # noqa: E402
 from . import protocol as P  # noqa: E402
 from .link import Generator  # noqa: E402
 
@@ -361,6 +362,203 @@ class ConsolePage(Gtk.Box):
             entry.set_text("")
 
 
+class BodePage(Gtk.Box):
+    def __init__(self, win: "MainWindow") -> None:
+        super().__init__(margin_top=12, margin_bottom=12, margin_start=12, margin_end=12)
+        self.win = win
+        self.points: list[B.BodePoint] = []
+        self.sweep: B.BodeSweep | None = None
+
+        side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        g = Adw.PreferencesGroup(title="Bode plot",
+                                 description="Generator → DUT → scope. Scope input channel probes the DUT input, "
+                                             "output channel the DUT output. Rigol DHO over LAN (SCPI port 5555).")
+        self.host = Adw.EntryRow(title="Scope address", text="192.168.1.174")
+        g.add(self.host)
+        self.gen_ch = Adw.ComboRow(title="Generator channel", model=Gtk.StringList.new(["CH1", "CH2"]))
+        g.add(self.gen_ch)
+        chans = Gtk.StringList.new(["CH1", "CH2", "CH3", "CH4"])
+        self.in_ch = Adw.ComboRow(title="Scope: DUT input", model=chans, selected=0)
+        self.out_ch = Adw.ComboRow(title="Scope: DUT output", model=Gtk.StringList.new(["CH1", "CH2", "CH3", "CH4"]),
+                                   selected=1)
+        g.add(self.in_ch)
+        g.add(self.out_ch)
+        self.start = Adw.EntryRow(title="Start frequency", text="100 Hz")
+        self.stop = Adw.EntryRow(title="Stop frequency", text="1 MHz")
+        g.add(self.start)
+        g.add(self.stop)
+        self.ppd = Adw.SpinRow(title="Points per decade", digits=0,
+                               adjustment=Gtk.Adjustment(lower=1, upper=50, step_increment=1, value=10))
+        g.add(self.ppd)
+        self.ampl = Adw.SpinRow(title="Amplitude", subtitle="Vpp", digits=2,
+                                adjustment=Gtk.Adjustment(lower=0.01, upper=20, step_increment=0.1, value=1.0))
+        g.add(self.ampl)
+        side.append(g)
+        bar = Gtk.Box(spacing=8)
+        self.run_btn = Gtk.Button(label="Start sweep", css_classes=["suggested-action", "pill"], hexpand=True)
+        self.run_btn.connect("clicked", self._on_run)
+        bar.append(self.run_btn)
+        self.csv_btn = Gtk.Button(icon_name="document-save-symbolic", tooltip_text="Save CSV", sensitive=False)
+        self.csv_btn.connect("clicked", self._on_csv)
+        bar.append(self.csv_btn)
+        side.append(bar)
+        self.status = Gtk.Label(label="", wrap=True, xalign=0, css_classes=["dim-label"])
+        side.append(self.status)
+        frame = Gtk.Frame(css_classes=["card"], hexpand=True, margin_start=12)
+        self.area = Gtk.DrawingArea(hexpand=True, vexpand=True, width_request=320, height_request=240)
+        self.area.set_draw_func(self._draw)
+        frame.set_child(self.area)
+        side_scroll = Gtk.ScrolledWindow(child=side, hscrollbar_policy=Gtk.PolicyType.NEVER, width_request=340)
+        paned = Gtk.Paned(start_child=side_scroll, end_child=frame, position=360, hexpand=True,
+                          resize_start_child=False, shrink_start_child=False, shrink_end_child=False)
+        self.append(paned)
+
+    # -- run control
+    def _on_run(self, _b) -> None:
+        if self.sweep and self.sweep.is_alive():
+            self.sweep.stop()
+            self.status.set_label("Stopping after this point…")
+            return
+        f0, f1 = parse_freq(self.start.get_text()), parse_freq(self.stop.get_text())
+        try:
+            freqs = B.log_freqs(f0 or 0, f1 or 0, int(self.ppd.get_value()))
+        except ValueError as e:
+            self.win.toast(str(e))
+            return
+        if max(freqs) > 80e6:
+            self.win.toast("Stop frequency above 80 MHz")
+            return
+        if not self.win.gen.connected:
+            self.win.toast("Generator not connected")
+            return
+        gch = self.gen_ch.get_selected() + 1
+        dlg = Adw.AlertDialog(
+            heading="Start Bode sweep?",
+            body=f"This turns generator CH{gch} ON at {self.ampl.get_value():.2f} Vpp, switches on scope channels "
+                 f"{self.in_ch.get_selected() + 1} and {self.out_ch.get_selected() + 1} and changes their V/div and "
+                 f"the timebase. {len(freqs)} points. The generator's frequency and output state are restored "
+                 "afterwards. Make sure the DUT can take this signal.")
+        dlg.add_response("cancel", "Cancel")
+        dlg.add_response("start", "Start")
+        dlg.set_response_appearance("start", Adw.ResponseAppearance.SUGGESTED)
+        dlg.connect("response", lambda _d, r: r == "start" and self._start(freqs, gch))
+        dlg.present(self.win)
+
+    def _start(self, freqs, gch) -> None:
+        scope = B.Scope(self.host.get_text().strip())
+        try:
+            idn = scope.connect()
+        except OSError as e:
+            self.win.toast(f"Scope: {e}")
+            return
+        self.points = []
+        self.area.queue_draw()
+        self.status.set_label(idn)
+        self.sweep = B.BodeSweep(self.win.gen, scope, gen_ch=gch, in_ch=self.in_ch.get_selected() + 1,
+                                 out_ch=self.out_ch.get_selected() + 1, freqs=freqs,
+                                 ampl_vpp=self.ampl.get_value(), on_point=self._on_point,
+                                 on_status=self.status.set_label, on_done=self._on_done)
+        self.win.sync_btn.set_active(False)        # no polling while sweeping
+        self.run_btn.set_label("Stop")
+        self.run_btn.set_css_classes(["destructive-action", "pill"])
+        self.sweep.start()
+
+    def _on_point(self, pt: B.BodePoint) -> bool:
+        self.points.append(pt)
+        self.csv_btn.set_sensitive(True)
+        self.area.queue_draw()
+        return False
+
+    def _on_done(self, msg: str) -> bool:
+        self.status.set_label(msg)
+        self.run_btn.set_label("Start sweep")
+        self.run_btn.set_css_classes(["suggested-action", "pill"])
+        self.sweep.scope.close()
+        self.win.sync_btn.set_active(True)
+        self.win.gen.read(*P.POLL_REGS)
+        return False
+
+    def _on_csv(self, _b) -> None:
+        dlg = Gtk.FileDialog(initial_name="bode.csv")
+
+        def done(d, res):
+            try:
+                f = d.save_finish(res)
+            except GLib.Error:
+                return
+            f.replace_contents(B.to_csv(self.points).encode(), None, False, 0, None)
+            self.win.toast(f"Saved {f.get_basename()}")
+        dlg.save(self.win, None, done)
+
+    # -- plot
+    def _draw(self, area, cr, w, h) -> None:
+        cr.set_source_rgba(0, 0, 0, 0.35)
+        cr.rectangle(0, 0, w, h)
+        cr.fill()
+        L, R, T, Bm = 56, 56, 16, 34
+        pw, ph = w - L - R, h - T - Bm
+        if pw < 50 or ph < 50:
+            return
+        pts = self.points
+        f0 = min((p.freq for p in pts), default=parse_freq(self.start.get_text()) or 100)
+        f1 = max((p.freq for p in pts), default=parse_freq(self.stop.get_text()) or 1e6)
+        if f1 <= f0:
+            f1 = f0 * 10
+        lf0, lf1 = math.floor(math.log10(f0)), math.ceil(math.log10(f1))
+        gains = [p.gain_db for p in pts] or [-40, 10]
+        g0 = 10 * math.floor(min(gains) / 10 - 0.5)
+        g1 = 10 * math.ceil(max(gains) / 10 + 0.5)
+        X = lambda f: L + (math.log10(f) - lf0) / (lf1 - lf0) * pw
+        Yg = lambda g: T + (g1 - g) / (g1 - g0) * ph
+        Yp = lambda p: T + (180 - p) / 360 * ph
+        cr.set_font_size(11)
+        cr.set_line_width(1)
+        for d in range(lf0, lf1 + 1):                      # decades + minor lines
+            for m in range(1, 10):
+                f = m * 10 ** d
+                if f > 10 ** lf1:
+                    break
+                x = X(f)
+                cr.set_source_rgba(1, 1, 1, 0.16 if m == 1 else 0.05)
+                cr.move_to(x + 0.5, T)
+                cr.line_to(x + 0.5, T + ph)
+                cr.stroke()
+            cr.set_source_rgba(1, 1, 1, 0.6)
+            cr.move_to(X(10 ** d) - 14, h - 12)
+            cr.show_text(P.format_freq(int(10 ** d * 1000)).replace(" ", ""))
+        for g in range(int(g0), int(g1) + 1, 10):
+            y = Yg(g)
+            cr.set_source_rgba(1, 1, 1, 0.08)
+            cr.move_to(L, y + 0.5)
+            cr.line_to(L + pw, y + 0.5)
+            cr.stroke()
+            cr.set_source_rgb(0.55, 0.9, 0.45)
+            cr.move_to(6, y + 4)
+            cr.show_text(f"{g:+d} dB")
+        cr.set_source_rgb(0.95, 0.55, 0.35)
+        for p in (-180, -90, 0, 90, 180):
+            cr.move_to(L + pw + 8, Yp(p) + 4)
+            cr.show_text(f"{p}°")
+        for series, color, Y in ((lambda p: p.gain_db, (0.55, 0.9, 0.45), Yg),
+                                 (lambda p: p.phase_deg, (0.95, 0.55, 0.35), Yp)):
+            cr.set_source_rgb(*color)
+            cr.set_line_width(2)
+            first = True
+            for p in pts:
+                v = series(p)
+                if v is None:
+                    first = True
+                    continue
+                (cr.move_to if first else cr.line_to)(X(p.freq), Y(v))
+                first = False
+            cr.stroke()
+            for p in pts:
+                v = series(p)
+                if v is not None:
+                    cr.arc(X(p.freq), Y(v), 2.5, 0, 2 * math.pi)
+                    cr.fill()
+
+
 class MainWindow(Adw.ApplicationWindow):
     def __init__(self, app, gen: Generator) -> None:
         super().__init__(application=app, title="PSG9080", default_width=1040, default_height=820)
@@ -389,6 +587,8 @@ class MainWindow(Adw.ApplicationWindow):
                                         "channels", "Channels", "media-playback-start-symbolic")
         self.arb = ArbPage(self)
         self.stack.add_titled_with_icon(self.arb, "arb", "Arbitrary", "document-edit-symbolic")
+        self.bode = BodePage(self)
+        self.stack.add_titled_with_icon(self.bode, "bode", "Bode", "utilities-system-monitor-symbolic")
         self.console = ConsolePage(self)
         self.stack.add_titled_with_icon(self.console, "console", "Console", "utilities-terminal-symbolic")
         self.info_label = Gtk.Label(css_classes=["dim-label", "caption"], margin_bottom=6)

@@ -7,11 +7,15 @@ two-channel signal generator. Talks to it over the **BSG145 Bluetooth LE module*
   offset, duty, phase. Changes on the front panel show up in the app (polling).
 - Arbitrary waveform designer: type an expression of `t` (or pick a preset), preview it and upload 2048 × 14-bit
   points to a slot. Verified by reading the slot back.
+- **Bode plot** with a Rigol DHO scope over LAN (SCPI, port 5555): steps the generator over a log frequency range,
+  autoscales both scope channels, measures Vpp in/out and phase, plots gain (dB) and phase, exports CSV. Asks before
+  switching anything on and restores the generator's frequency and output state afterwards.
 - Console for raw commands, with the calibration / flash commands (`w97`, `w98`) blocked.
 
 ## Install
 
-    ./install.sh            # per-user, no root; then open "PSG9080 Signal Generator"
+    curl -fsSL https://raw.githubusercontent.com/bigtimer-dev/psg9080-linux/main/install.sh | bash
+    ./install.sh            # or from a clone; per-user, no root; then open "PSG9080 Signal Generator"
     psg9080                 # Bluetooth (auto-finds the paired BSG145 module)
     psg9080 --usb           # first USB serial port, 115200 baud (--serial /dev/ttyUSB0 --baud N to override)
 
