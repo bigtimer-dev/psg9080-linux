@@ -922,7 +922,7 @@ class MemoryPage(Gtk.Box):
         self.run_btn = Gtk.Button(label="Run P00…", css_classes=["destructive-action"])
         self.run_btn.connect("clicked", self._on_prog_run)
         stop = Gtk.Button(label="Stop")
-        stop.connect("clicked", lambda _b: self.win.gen.request(P.program_control_cmd(P.PROG_STOP)))
+        stop.connect("clicked", self._on_prog_stop)
         for b in (self.read_btn, self.write_btn, self.run_btn, stop):
             box.append(b)
         row.add_suffix(box)
@@ -1025,6 +1025,14 @@ class MemoryPage(Gtk.Box):
         self._confirm(f"Run P{n:02d}?",
                       "Each instruction loads a memory, which replaces the current settings of both channels; the "
                       "outputs follow what is stored in those memories. Use Stop to end it.", "Run", run)
+
+    def _on_prog_stop(self, _b) -> None:
+        if not self._ready():
+            return
+        g = self.win.gen
+        # stopping leaves the panel on the programming screen (0,8,0,0): go back to the main screen
+        g.request(P.program_control_cmd(P.PROG_STOP), lambda _f: g.write(24, *P.SCREEN_MAIN,
+                                                                         cb=lambda: g.read(*P.POLL_REGS)))
 
     # -- calibration
     def _on_cal(self, _b) -> None:
