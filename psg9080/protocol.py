@@ -11,6 +11,11 @@ Registers (CHx = odd/even pairs):
   10 outputs "ch1,ch2"    11/12 waveform            13/14 frequency "mHz,unit"
   15/16 amplitude mV      17/18 offset (1000 = 0 V, 10 mV steps)
   19/20 duty x0.01 %      21/22 phase x0.01 deg     97 calibration table (never write)
+  25 CH2 sync flags (waveform, frequency, amplitude, offset, duty, external)
+Sweep (verified on a scope 2026-11-07):
+  64 "channel,time,direction,mode"  channel 0=CH1 1=CH2, time in 10 ms, direction 0 up 1 down 2 round trip,
+                                    mode 0 linear 1 logarithmic
+  65 "1,1" running / "0,0" stopped  66/67 start / end frequency in 0.1 Hz
 """
 
 from __future__ import annotations
@@ -116,12 +121,38 @@ class Channel:
         return f"#{self.wave}"
 
 
+SWEEP_DIRECTIONS = ["Up", "Down", "Round trip"]
+SWEEP_MODES = ["Linear", "Logarithmic"]
+SWEEP_REGS = [64, 65, 66, 67]
+SWEEP_TIME_MAX = 64000             # 640 s in 10 ms units
+
+
+@dataclass
+class Sweep:
+    channel: int = 0               # 0 = CH1, 1 = CH2
+    time_cs: int = 1000            # sweep time in 10 ms units
+    direction: int = 0
+    log: bool = False
+    running: bool = False
+    start_dhz: int = 10000         # 0.1 Hz units
+    end_dhz: int = 100000
+
+
+def sweep_config_cmd(sw: "Sweep") -> tuple[int, ...]:
+    return (sw.channel, max(1, min(SWEEP_TIME_MAX, sw.time_cs)), sw.direction, int(sw.log))
+
+
+def hz_to_dhz(hz: float) -> int:
+    return max(0, min(FREQ_MAX_MHZ // 100, int(round(hz * 10))))
+
+
 @dataclass
 class DeviceState:
     model: str = ""
     serial: str = ""
     versions: str = ""
     ch: list[Channel] = field(default_factory=lambda: [Channel(1), Channel(2)])
+    sweep: Sweep = field(default_factory=Sweep)
 
     def apply(self, reg: int, fields: list[str]) -> None:
         f = [x.strip() for x in fields]
@@ -148,6 +179,15 @@ class DeviceState:
                 self.ch[reg - 19].duty_reg = int(f[0])
             elif reg in (21, 22):
                 self.ch[reg - 21].phase_reg = int(f[0])
+            elif reg == 64:
+                sw = self.sweep
+                sw.channel, sw.time_cs, sw.direction, sw.log = int(f[0]), int(f[1]), int(f[2]), f[3] == "1"
+            elif reg == 65:
+                self.sweep.running = f[0] == "1"
+            elif reg == 66:
+                self.sweep.start_dhz = int(f[0])
+            elif reg == 67:
+                self.sweep.end_dhz = int(f[0])
         except (ValueError, IndexError) as e:
             raise ProtocolError(f"bad fields for r{reg:02d}: {fields}") from e
 

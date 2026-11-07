@@ -13,6 +13,8 @@ two-channel signal generator. Talks to it over the **BSG145 Bluetooth LE module*
   generator flatness. Asks before switching anything on; restores generator and scope settings afterwards.
   Note: on DHO800/900 firmware 00.05.02 `:MEAS:ITEM?` makes the SCPI server drop the connection (it restarts after
   ~10 s), which is why the app never uses it.
+- **Frequency sweep**: channel, start/end frequency, time (10 ms … 640 s), up / down / round trip, linear / log,
+  start/stop, with a frequency-vs-time preview.
 - Console for raw commands, with the calibration / flash commands (`w97`, `w98`) blocked.
 
 ## Install
@@ -39,8 +41,13 @@ Pair the Bluetooth module once: `bluetoothctl scan le`, then `pair` / `trust` it
 | 17 / 18 | offset | 1000 = 0 V, 10 mV steps |
 | 19 / 20 | duty | 0.01 % |
 | 21 / 22 | phase | 0.01 ° |
+| 25 | CH2 sync flags: waveform, frequency, amplitude, offset, duty, external | 6 × 0/1 |
+| 64 | sweep `channel,time,direction,mode` | ch 0/1, time 10 ms, dir 0 up / 1 down / 2 round trip, mode 0 lin / 1 log |
+| 65 | sweep running `1,1` / stopped `0,0` | |
+| 66 / 67 | sweep start / end frequency | 0.1 Hz |
 
-Modulation, sweep and burst registers (24–75) are not in the UI yet.
+Sweep registers were verified by watching the output on a scope. Modulation and burst (registers 40–63) are
+still being mapped.
 
 ## Tests
 

@@ -62,3 +62,20 @@ class ProtocolTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SweepTest(unittest.TestCase):
+    def test_apply_live_values(self):
+        st = P.DeviceState()
+        for line in (":r64=0,00300,0,1.", ":r65=1,1.", ":r66=0000012340.", ":r67=0000056780."):
+            _, reg, fields = P.parse_reply(line)
+            st.apply(reg, fields)
+        sw = st.sweep
+        self.assertEqual((sw.channel, sw.time_cs, sw.direction, sw.log, sw.running), (0, 300, 0, True, True))
+        self.assertEqual((sw.start_dhz, sw.end_dhz), (12340, 56780))
+        self.assertEqual(P.write_cmd(64, *P.sweep_config_cmd(sw)), b":w64=0,300,0,1.\r\n")
+        self.assertEqual(P.hz_to_dhz(1234.0), 12340)
+
+
+if __name__ == "__main__":
+    unittest.main()

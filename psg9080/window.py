@@ -332,6 +332,145 @@ class ArbPage(Gtk.Box):
         self.win.gen.upload_arb(slot, P.arb_to_points(self.norm), cb=done)
 
 
+class SweepPage(Gtk.Box):
+    """Frequency sweep (registers 64-67). Amplitude/duty sweep are panel-only for now."""
+
+    def __init__(self, win: "MainWindow") -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12,
+                         margin_top=12, margin_bottom=12, margin_start=12, margin_end=12)
+        self.win = win
+        self._loading = False
+        clamp = Adw.Clamp(maximum_size=640)
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        clamp.set_child(page)
+        self.append(clamp)
+
+        g = Adw.PreferencesGroup(title="Frequency sweep",
+                                 description="Changes apply on Enter. The generator remembers these settings.")
+        self.run = Adw.SwitchRow(title="Sweep running")
+        self.run.connect("notify::active", self._on_run)
+        g.add(self.run)
+        self.chan = Adw.ComboRow(title="Channel", model=Gtk.StringList.new(["CH1", "CH2"]))
+        self.start = Adw.EntryRow(title="Start frequency (e.g. 1 kHz)", show_apply_button=True)
+        self.end = Adw.EntryRow(title="End frequency", show_apply_button=True)
+        self.time = Adw.SpinRow(title="Sweep time", subtitle="seconds", digits=2,
+                                adjustment=Gtk.Adjustment(lower=0.01, upper=640, step_increment=0.1,
+                                                          page_increment=1, value=10))
+        self.dir = Adw.ComboRow(title="Direction", model=Gtk.StringList.new(P.SWEEP_DIRECTIONS))
+        self.mode = Adw.ComboRow(title="Mode", model=Gtk.StringList.new(P.SWEEP_MODES))
+        for row in (self.chan, self.start, self.end, self.time, self.dir, self.mode):
+            g.add(row)
+        page.append(g)
+        for e, reg in ((self.start, 66), (self.end, 67)):
+            e.connect("apply", self._on_freq, reg)
+            e.connect("entry-activated", self._on_freq, reg)
+        for row in (self.chan, self.dir, self.mode):
+            row.connect("notify::selected", lambda *_: self._send_config())
+        self.time.connect("notify::value", lambda *_: self._debounce())
+        self._tid = 0
+
+        self.area = Gtk.DrawingArea(content_height=160, hexpand=True)
+        self.area.set_draw_func(self._draw)
+        page.append(Gtk.Frame(child=self.area, css_classes=["card"]))
+        self.connect("map", lambda *_: self.refresh_now())
+
+    # -- device -> UI
+    def refresh_now(self) -> None:
+        if self.win.gen.connected:
+            self.win.gen.read(*P.SWEEP_REGS)
+
+    def refresh(self) -> None:
+        sw = self.win.gen.state.sweep
+        self._loading = True
+        try:
+            self.run.set_active(sw.running)
+            self.chan.set_selected(sw.channel)
+            self.dir.set_selected(min(sw.direction, 2))
+            self.mode.set_selected(int(sw.log))
+            if not self.time.has_focus() and not self._tid:
+                self.time.set_value(sw.time_cs / 100)
+            if not self.start.has_focus():
+                self.start.set_text(P.format_freq(sw.start_dhz * 100))
+            if not self.end.has_focus():
+                self.end.set_text(P.format_freq(sw.end_dhz * 100))
+        finally:
+            self._loading = False
+        self.area.queue_draw()
+
+    # -- UI -> device
+    def _on_run(self, *_a) -> None:
+        if self._loading:
+            return
+        v = int(self.run.get_active())
+        self.win.gen.write(65, v, v, cb=lambda: self.win.gen.read(65))
+
+    def _on_freq(self, entry, reg: int) -> None:
+        hz = parse_freq(entry.get_text())
+        if hz is None or hz <= 0:
+            self.win.toast("Invalid frequency")
+            return
+        self.win.gen.write(reg, P.hz_to_dhz(hz), cb=lambda: self.win.gen.read(reg))
+
+    def _debounce(self) -> None:
+        if self._loading:
+            return
+        if self._tid:
+            GLib.source_remove(self._tid)
+        self._tid = GLib.timeout_add(400, self._fire)
+
+    def _fire(self) -> bool:
+        self._tid = 0
+        self._send_config()
+        return False
+
+    def _send_config(self) -> None:
+        if self._loading:
+            return
+        sw = P.Sweep(channel=self.chan.get_selected(), time_cs=int(round(self.time.get_value() * 100)),
+                     direction=self.dir.get_selected(), log=self.mode.get_selected() == 1)
+        self.win.gen.write(64, *P.sweep_config_cmd(sw), cb=lambda: self.win.gen.read(64))
+
+    def _draw(self, area, cr, w, h) -> None:
+        """Frequency vs time over one sweep period."""
+        import math
+        sw = self.win.gen.state.sweep
+        cr.set_source_rgba(0, 0, 0, 0.35)
+        cr.rectangle(0, 0, w, h)
+        cr.fill()
+        f0, f1 = max(sw.start_dhz, 1) / 10, max(sw.end_dhz, 1) / 10
+        lo, hi = min(f0, f1), max(f0, f1)
+        n = 200
+
+        def freq(u):                               # u in 0..1 along the sweep
+            if sw.direction == 1:
+                u = 1 - u
+            elif sw.direction == 2:
+                u = 1 - abs(2 * u - 1)
+            return f0 * (f1 / f0) ** u if sw.log else f0 + (f1 - f0) * u
+
+        def y(f):
+            if hi == lo:
+                return h / 2
+            if sw.log:
+                return h - 10 - (math.log(f / lo) / math.log(hi / lo)) * (h - 20)
+            return h - 10 - (f - lo) / (hi - lo) * (h - 20)
+        cr.set_source_rgb(*((0.98, 0.84, 0.25) if sw.channel == 0 else (0.35, 0.8, 0.95)))
+        cr.set_line_width(2)
+        for i in range(n + 1):
+            x = 8 + i / n * (w - 16)
+            (cr.move_to if i == 0 else cr.line_to)(x, y(freq(i / n)))
+        cr.stroke()
+        cr.set_source_rgba(1, 1, 1, 0.7)
+        cr.select_font_face("Sans")
+        cr.set_font_size(11)
+        cr.move_to(10, 16)
+        cr.show_text(f"{P.format_freq(int(hi * 1000))}")
+        cr.move_to(10, h - 14)
+        cr.show_text(f"{P.format_freq(int(lo * 1000))}")
+        cr.move_to(w - 70, h - 14)
+        cr.show_text(f"{sw.time_cs / 100:g} s")
+
+
 class ConsolePage(Gtk.Box):
     def __init__(self, win: "MainWindow") -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8,
@@ -591,6 +730,8 @@ class MainWindow(Adw.ApplicationWindow):
                                         "channels", "Channels", "media-playback-start-symbolic")
         self.arb = ArbPage(self)
         self.stack.add_titled_with_icon(self.arb, "arb", "Arbitrary", "document-edit-symbolic")
+        self.sweep = SweepPage(self)
+        self.stack.add_titled_with_icon(self.sweep, "sweep", "Sweep", "media-seek-forward-symbolic")
         self.bode = BodePage(self)
         self.stack.add_titled_with_icon(self.bode, "bode", "Bode", "utilities-system-monitor-symbolic")
         self.console = ConsolePage(self)
@@ -616,6 +757,7 @@ class MainWindow(Adw.ApplicationWindow):
     def _on_state(self) -> None:
         for p in self.panels:
             p.refresh()
+        self.sweep.refresh()
         s = self.gen.state
         if s.model:
             self.info_label.set_label(f"PSG90{s.model}  ·  S/N {s.serial}  ·  versions {s.versions}")
@@ -625,6 +767,7 @@ class MainWindow(Adw.ApplicationWindow):
         if connected:
             self.gen.read(*P.INFO_REGS)
             self.gen.read(*P.POLL_REGS)
+            self.gen.read(*P.SWEEP_REGS)
             if self._poll_id is None:
                 self._poll_id = GLib.timeout_add(POLL_MS, self._poll)
         for p in self.panels:
@@ -633,6 +776,8 @@ class MainWindow(Adw.ApplicationWindow):
     def _poll(self) -> bool:
         if self.gen.connected and self.sync_btn.get_active() and self.gen.pending() == 0:
             self.gen.read(*P.POLL_REGS)
+            if self.stack.get_visible_child_name() == "sweep":
+                self.gen.read(*P.SWEEP_REGS)
         return True
 
     def _on_close(self, *_a) -> bool:
