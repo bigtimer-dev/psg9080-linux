@@ -526,7 +526,9 @@ class ModPage(Gtk.Box):
         trig.connect("clicked", self._on_trigger)
         self.trig_btn = trig
         self.trig_row.add_suffix(trig)
-        for row in (self.burst_count, self.burst_src, self.trig_row):
+        self.burst_idle = Adw.ComboRow(title="Output between bursts", model=Gtk.StringList.new(P.BURST_IDLE))
+        self.burst_idle.connect("notify::selected", self._on_burst_idle)
+        for row in (self.burst_count, self.burst_src, self.burst_idle, self.trig_row):
             p.add(row)
         self._btid = 0
         page.append(p)
@@ -557,6 +559,7 @@ class ModPage(Gtk.Box):
             if not self._btid:
                 self.burst_count.set_value(max(1, m.burst_count))
             self.burst_src.set_selected(min(m.burst_source, 3))
+            self.burst_idle.set_selected(min(m.burst_idle, 2))
             for row, text in ((self.freq, P.format_freq(m.freq_mhz)), (self.depth, f"{m.depth / 10:g}"),
                               (self.fm_dev, P.format_freq(m.fm_dev_dhz * 100)),
                               (self.hop, P.format_freq(m.hop_dhz * 100)), (self.pm_dev, f"{m.pm_dev / 10:g}")):
@@ -569,7 +572,7 @@ class ModPage(Gtk.Box):
         self.fm_dev.set_visible(m.type == 1)
         self.pm_dev.set_visible(m.type == 2)
         self.hop.set_visible(m.type == 4)
-        for row in (self.burst_count, self.burst_src):
+        for row in (self.burst_count, self.burst_src, self.burst_idle):
             row.set_visible(m.type == 7)
         self.trig_row.set_visible(m.type == 7 and m.burst_source == 0)
         notes = {0: f"Generator depth {m.depth / 10:g} % = textbook depth "
@@ -621,6 +624,13 @@ class ModPage(Gtk.Box):
         srcs = [m.burst_source for m in self.win.gen.state.mod]
         srcs[self.ch] = self.burst_src.get_selected()
         self.win.gen.write(60, *srcs, cb=lambda: self.win.gen.read(60))
+
+    def _on_burst_idle(self, *_a) -> None:
+        if self._loading:
+            return
+        idle = [m.burst_idle for m in self.win.gen.state.mod]
+        idle[self.ch] = self.burst_idle.get_selected()
+        self.win.gen.write(58, *idle, cb=lambda: self.win.gen.read(58))
 
     def _on_trigger(self, _b) -> None:
         g = self.win.gen

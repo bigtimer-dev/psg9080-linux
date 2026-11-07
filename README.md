@@ -52,6 +52,7 @@ Pair the Bluetooth module once: `bluetoothctl scan le`, then `pair` / `trust` it
 | 49 / 50 | FSK hop frequency | 0.1 Hz |
 | 51 / 52 | PM deviation | 0.1 ° peak-to-peak |
 | 60 | burst trigger source `ch1,ch2` | 0 button, 1 internal, 2 ext AC, 3 ext DC |
+| 58 | burst idle level `ch1,ch2` | 0 zero, 1 +max, 2 −max |
 | 61 | burst pulse count `ch1,ch2` | 1 … 100000000 |
 | 74 | write `1,0,0,0` = fire one burst (same as the Trig. key) | one-shot |
 | 64 | sweep `channel,time,direction,mode` | ch 0/1, time 10 ms, dir 0 up / 1 down / 2 round trip, mode 0 lin / 1 log |
@@ -60,8 +61,8 @@ Pair the Bluetooth module once: `bluetoothctl scan le`, then `pair` / `trust` it
 
 Sweep and modulation registers were verified by measuring the output with a scope (spectrum / envelope /
 instantaneous frequency). AM depth: the generator's depth m makes the envelope run from the set amplitude down to
-(1 − m) of it, so the textbook depth (max − min)/(max + min) is m / (2 − m): 70 % set = 53.8 %. PWM, burst idle
-level, external modulation and amplitude/duty sweep are not mapped yet.
+(1 − m) of it, so the textbook depth (max − min)/(max + min) is m / (2 − m): 70 % set = 53.8 %. PWM (its carrier is not
+the channel frequency; not understood yet), external modulation and amplitude/duty sweep are not mapped yet.
 
 ## Tests
 

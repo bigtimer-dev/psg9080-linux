@@ -91,10 +91,11 @@ class ModulationTest(unittest.TestCase):
 
     def test_burst(self):
         st = P.DeviceState()
-        for line in (":r40=7,0.", ":r60=0,0.", ":r61=0000000007,0000000001."):
+        for line in (":r40=7,0.", ":r58=0,2.", ":r60=0,0.", ":r61=0000000007,0000000001."):
             _, reg, fields = P.parse_reply(line)
             st.apply(reg, fields)
         self.assertEqual((st.mod[0].type, st.mod[0].burst_count, st.mod[1].burst_count), (7, 7, 1))
+        self.assertEqual((st.mod[0].burst_idle, st.mod[1].burst_idle), (0, 2))
         self.assertEqual(P.write_cmd(74, *P.BURST_TRIGGER), b":w74=1,0,0,0.\r\n")
 
     def test_am_depth_definition(self):
