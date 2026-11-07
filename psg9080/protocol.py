@@ -16,7 +16,8 @@ Sweep (verified on a scope 2026-11-07):
   64 "channel,time,direction,mode"  channel 0=CH1 1=CH2, time in 10 ms, direction 0 up 1 down 2 round trip,
                                     mode 0 linear 1 logarithmic
   65 "1,1" running / "0,0" stopped  66/67 start / end frequency in 0.1 Hz
-  24 front-panel screen: 0,1,0,1 main, 0,6,0,6 sweep, 0,1,0,12 modulation. Sweep/modulation only run while the
+  68/69 amplitude sweep start / end in mV, 70/71 duty sweep start / end in 0.01 % (duty needs the Pulse waveform)
+  24 front-panel screen: 0,1,0,1 main, 0,6,X,6 sweep with X = 0 frequency 1 amplitude 2 duty, 0,1,0,12 modulation. Sweep/modulation only run while the
      screen shows them.
 Modulation (verified on a scope 2026-11-07; odd register = CH1, even = CH2):
   40 type "ch1,ch2": 0 AM 1 FM 2 PM 3 ASK 4 FSK 5 PSK 6 PWM 7 Burst
@@ -136,9 +137,14 @@ class Channel:
 
 SWEEP_DIRECTIONS = ["Up", "Down", "Round trip"]
 SWEEP_MODES = ["Linear", "Logarithmic"]
-SWEEP_REGS = [64, 65, 66, 67]
+SWEEP_REGS = [24, 64, 65, 66, 67, 68, 69, 70, 71]
+SWEEP_OBJECTS = ["Frequency", "Amplitude", "Duty cycle"]
 SCREEN_MAIN = (0, 1, 0, 1)         # register 24 values
 SCREEN_SWEEP = (0, 6, 0, 6)
+
+
+def sweep_screen(obj: int) -> tuple[int, ...]:
+    return (0, 6, obj, 6)
 SCREEN_MOD = (0, 1, 0, 12)
 SCREEN_PWM = (0, 1, 0, 8)
 
@@ -186,6 +192,10 @@ class Sweep:
     running: bool = False
     start_dhz: int = 10000         # 0.1 Hz units
     end_dhz: int = 100000
+    start_mv: int = 1000           # amplitude sweep
+    end_mv: int = 6000
+    start_duty: int = 2000         # duty sweep, 0.01 %
+    end_duty: int = 8000
 
 
 def sweep_config_cmd(sw: "Sweep") -> tuple[int, ...]:
@@ -233,6 +243,9 @@ class DeviceState:
                 self.ch[reg - 21].phase_reg = int(f[0])
             elif reg == 24:
                 self.screen = tuple(int(x) for x in f)
+            elif reg in (68, 69, 70, 71):
+                attr = ("start_mv", "end_mv", "start_duty", "end_duty")[reg - 68]
+                setattr(self.sweep, attr, int(f[0]))
             elif reg == 40:
                 self.mod[0].type, self.mod[1].type = int(f[0]), int(f[1])
             elif reg in (53, 54):

@@ -333,7 +333,7 @@ class ArbPage(Gtk.Box):
 
 
 class SweepPage(Gtk.Box):
-    """Frequency sweep (registers 64-67). Amplitude/duty sweep are panel-only for now."""
+    """Frequency / amplitude / duty sweep (registers 24, 64-71)."""
 
     def __init__(self, win: "MainWindow") -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12,
@@ -345,14 +345,17 @@ class SweepPage(Gtk.Box):
         clamp.set_child(page)
         self.append(clamp)
 
-        g = Adw.PreferencesGroup(title="Frequency sweep",
+        g = Adw.PreferencesGroup(title="Sweep",
                                  description="Changes apply on Enter. The generator remembers these settings.")
         self.run = Adw.SwitchRow(title="Sweep running")
         self.run.connect("notify::active", self._on_run)
         g.add(self.run)
         self.chan = Adw.ComboRow(title="Channel", model=Gtk.StringList.new(["CH1", "CH2"]))
-        self.start = Adw.EntryRow(title="Start frequency (e.g. 1 kHz)", show_apply_button=True)
-        self.end = Adw.EntryRow(title="End frequency", show_apply_button=True)
+        self.obj = Adw.ComboRow(title="Sweep", model=Gtk.StringList.new(P.SWEEP_OBJECTS))
+        self.obj.connect("notify::selected", self._on_obj)
+        g.add(self.obj)
+        self.start = Adw.EntryRow(title="Start", show_apply_button=True)
+        self.end = Adw.EntryRow(title="End", show_apply_button=True)
         self.time = Adw.SpinRow(title="Sweep time", subtitle="seconds", digits=2,
                                 adjustment=Gtk.Adjustment(lower=0.01, upper=640, step_increment=0.1,
                                                           page_increment=1, value=10))
@@ -361,9 +364,9 @@ class SweepPage(Gtk.Box):
         for row in (self.chan, self.start, self.end, self.time, self.dir, self.mode):
             g.add(row)
         page.append(g)
-        for e, reg in ((self.start, 66), (self.end, 67)):
-            e.connect("apply", self._on_freq, reg)
-            e.connect("entry-activated", self._on_freq, reg)
+        for e, end in ((self.start, 0), (self.end, 1)):
+            e.connect("apply", self._on_value, end)
+            e.connect("entry-activated", self._on_value, end)
         for row in (self.chan, self.dir, self.mode):
             row.connect("notify::selected", lambda *_: self._send_config())
         self.time.connect("notify::value", lambda *_: self._debounce())
@@ -389,10 +392,17 @@ class SweepPage(Gtk.Box):
             self.mode.set_selected(int(sw.log))
             if not self.time.has_focus() and not self._tid:
                 self.time.set_value(sw.time_cs / 100)
+            scr = self.win.gen.state.screen
+            if len(scr) == 4 and scr[1] == 6:          # panel is on a sweep screen: follow its object
+                self.obj.set_selected(min(scr[2], 2))
+            obj = self.obj.get_selected()
+            v0, v1 = self._values(sw, obj)
+            self.start.set_title(f"Start {P.SWEEP_OBJECTS[obj].lower()} ({self._units(obj)})")
+            self.end.set_title(f"End {P.SWEEP_OBJECTS[obj].lower()}")
             if not self.start.has_focus():
-                self.start.set_text(P.format_freq(sw.start_dhz * 100))
+                self.start.set_text(self._fmt(obj, v0))
             if not self.end.has_focus():
-                self.end.set_text(P.format_freq(sw.end_dhz * 100))
+                self.end.set_text(self._fmt(obj, v1))
         finally:
             self._loading = False
         self.area.queue_draw()
@@ -404,18 +414,60 @@ class SweepPage(Gtk.Box):
         g = self.win.gen
         if self.run.get_active():
             # the generator only sweeps while its screen is in sweep mode: switch it there first
-            g.write(24, *P.SCREEN_SWEEP)
+            g.write(24, *P.sweep_screen(self.obj.get_selected()))
             g.write(65, 1, 1, cb=lambda: g.read(24, 65))
         else:
             g.write(65, 0, 0)
             g.write(24, *P.SCREEN_MAIN, cb=lambda: g.read(24, 65))
 
-    def _on_freq(self, entry, reg: int) -> None:
-        hz = parse_freq(entry.get_text())
-        if hz is None or hz <= 0:
-            self.win.toast("Invalid frequency")
+    # value handling per sweep object: (start, end) in display units
+    @staticmethod
+    def _values(sw, obj: int) -> tuple[float, float]:
+        if obj == 1:
+            return sw.start_mv / 1000, sw.end_mv / 1000             # Vpp
+        if obj == 2:
+            return sw.start_duty / 100, sw.end_duty / 100           # %
+        return sw.start_dhz / 10, sw.end_dhz / 10                   # Hz
+
+    @staticmethod
+    def _units(obj: int) -> str:
+        return ("e.g. 1 kHz", "Vpp", "%, Pulse waveform only")[obj]
+
+    @staticmethod
+    def _fmt(obj: int, v: float) -> str:
+        if obj == 0:
+            return P.format_freq(int(round(v * 1000)))
+        return f"{v:g}"
+
+    def _on_obj(self, *_a) -> None:
+        if self._loading:
             return
-        self.win.gen.write(reg, P.hz_to_dhz(hz), cb=lambda: self.win.gen.read(reg))
+        self.refresh()
+        g = self.win.gen
+        if self.run.get_active():                     # switch the running sweep to the new object
+            g.write(24, *P.sweep_screen(self.obj.get_selected()), cb=lambda: g.read(24))
+
+    def _on_value(self, entry, end: int) -> None:
+        obj = self.obj.get_selected()
+        text = entry.get_text()
+        if obj == 0:
+            v = parse_freq(text)
+            if v is None or v <= 0:
+                self.win.toast("Invalid frequency")
+                return
+            reg, val = 66 + end, P.hz_to_dhz(v)
+        else:
+            try:
+                v = float(text.replace(",", ".").rstrip("%V pp"))
+            except ValueError:
+                v = -1
+            lo, hi = (0, P.AMPL_MAX_MV / 1000) if obj == 1 else (0, P.DUTY_MAX / 100)
+            if not lo <= v <= hi:
+                self.win.toast(f"Enter {lo:g} … {hi:g}")
+                return
+            reg = (68 if obj == 1 else 70) + end
+            val = int(round(v * (1000 if obj == 1 else 100)))
+        self.win.gen.write(reg, val, cb=lambda: self.win.gen.read(reg))
 
     def _debounce(self) -> None:
         if self._loading:
@@ -440,10 +492,11 @@ class SweepPage(Gtk.Box):
         """Frequency vs time over one sweep period."""
         import math
         sw = self.win.gen.state.sweep
+        obj = self.obj.get_selected()
         cr.set_source_rgba(0, 0, 0, 0.35)
         cr.rectangle(0, 0, w, h)
         cr.fill()
-        f0, f1 = max(sw.start_dhz, 1) / 10, max(sw.end_dhz, 1) / 10
+        f0, f1 = (max(x, 1e-3) for x in self._values(sw, obj))
         lo, hi = min(f0, f1), max(f0, f1)
         n = 200
 
@@ -470,9 +523,10 @@ class SweepPage(Gtk.Box):
         cr.select_font_face("Sans")
         cr.set_font_size(11)
         cr.move_to(10, 16)
-        cr.show_text(f"{P.format_freq(int(hi * 1000))}")
+        unit = ("", " Vpp", " %")[obj]
+        cr.show_text(self._fmt(obj, hi) + unit)
         cr.move_to(10, h - 14)
-        cr.show_text(f"{P.format_freq(int(lo * 1000))}")
+        cr.show_text(self._fmt(obj, lo) + unit)
         cr.move_to(w - 70, h - 14)
         cr.show_text(f"{sw.time_cs / 100:g} s")
 

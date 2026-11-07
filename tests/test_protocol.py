@@ -76,6 +76,15 @@ class SweepTest(unittest.TestCase):
         self.assertEqual(P.write_cmd(64, *P.sweep_config_cmd(sw)), b":w64=0,300,0,1.\r\n")
         self.assertEqual(P.hz_to_dhz(1234.0), 12340)
 
+    def test_amplitude_duty_sweep(self):
+        st = P.DeviceState()
+        for line in (":r24=00,06,01,06.", ":r68=01000.", ":r69=06000.", ":r70=02000.", ":r71=08000."):
+            _, reg, fields = P.parse_reply(line)
+            st.apply(reg, fields)
+        sw = st.sweep
+        self.assertEqual((sw.start_mv, sw.end_mv, sw.start_duty, sw.end_duty), (1000, 6000, 2000, 8000))
+        self.assertEqual(st.screen, P.sweep_screen(1))
+
 
 class ModulationTest(unittest.TestCase):
     def test_apply_live_values(self):
