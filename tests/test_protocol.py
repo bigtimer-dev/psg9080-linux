@@ -89,6 +89,14 @@ class ModulationTest(unittest.TestCase):
         self.assertEqual((m1.type, m1.freq_mhz, m1.depth, m1.fm_dev_dhz), (0, 300000, 700, 20000))
         self.assertEqual((m2.hop_dhz, m2.pm_dev), (50000, 1800))
 
+    def test_burst(self):
+        st = P.DeviceState()
+        for line in (":r40=7,0.", ":r60=0,0.", ":r61=0000000007,0000000001."):
+            _, reg, fields = P.parse_reply(line)
+            st.apply(reg, fields)
+        self.assertEqual((st.mod[0].type, st.mod[0].burst_count, st.mod[1].burst_count), (7, 7, 1))
+        self.assertEqual(P.write_cmd(74, *P.BURST_TRIGGER), b":w74=1,0,0,0.\r\n")
+
     def test_am_depth_definition(self):
         # measured on the scope: 70 % set -> 53.5 %, 100 % -> 99.7 %
         self.assertAlmostEqual(P.am_textbook_depth(0.7), 0.538, places=3)

@@ -23,6 +23,8 @@ Modulation (verified on a scope 2026-11-07; odd register = CH1, even = CH2):
   43/44 modulation frequency in mHz      45/46 AM depth in 0.1 % (also the ASK low level)
   47/48 FM deviation in 0.1 Hz           49/50 FSK hop frequency in 0.1 Hz
   51/52 PM deviation in 0.1 deg peak-to-peak
+  Burst: 61 pulse count "ch1,ch2" (1..100000000); 60 trigger source "ch1,ch2" 0 button 1 internal (2 ext AC,
+  3 ext DC per firmware range); w74=1,0,0,0 fires a manual burst (one-shot).
   AM "depth" m: the envelope runs from the set amplitude down to (1-m) of it; textbook depth = m/(2-m).
 """
 
@@ -137,7 +139,10 @@ SCREEN_SWEEP = (0, 6, 0, 6)
 SCREEN_MOD = (0, 1, 0, 12)
 
 MOD_TYPES = ["AM", "FM", "PM", "ASK", "FSK", "PSK", "PWM", "Burst"]
-MOD_REGS = [24, 40, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52]
+MOD_REGS = [24, 40, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 60, 61]
+BURST_SOURCES = ["Button / app", "Internal", "External AC", "External DC"]
+BURST_MAX = 100_000_000
+BURST_TRIGGER = (1, 0, 0, 0)       # register 74
 
 
 @dataclass
@@ -148,6 +153,8 @@ class Modulation:
     fm_dev_dhz: int = 10000        # FM deviation, 0.1 Hz
     hop_dhz: int = 20000           # FSK hop frequency, 0.1 Hz
     pm_dev: int = 1800             # PM deviation, 0.1 deg peak-to-peak
+    burst_count: int = 1
+    burst_source: int = 0
 
 
 def am_textbook_depth(m: float) -> float:
@@ -219,6 +226,10 @@ class DeviceState:
                 m = self.mod[(reg - 43) % 2]
                 attr = ("freq_mhz", "depth", "fm_dev_dhz", "hop_dhz", "pm_dev")[(reg - 43) // 2]
                 setattr(m, attr, int(f[0]))
+            elif reg == 60:
+                self.mod[0].burst_source, self.mod[1].burst_source = int(f[0]), int(f[1])
+            elif reg == 61:
+                self.mod[0].burst_count, self.mod[1].burst_count = int(f[0]), int(f[1])
             elif reg == 64:
                 sw = self.sweep
                 sw.channel, sw.time_cs, sw.direction, sw.log = int(f[0]), int(f[1]), int(f[2]), f[3] == "1"

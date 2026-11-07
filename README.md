@@ -15,7 +15,7 @@ two-channel signal generator. Talks to it over the **BSG145 Bluetooth LE module*
   ~10 s), which is why the app never uses it.
 - **Frequency sweep**: channel, start/end frequency, time (10 ms … 640 s), up / down / round trip, linear / log,
   start/stop, with a frequency-vs-time preview.
-- **Modulation**: AM, FM, PM, ASK, FSK, PSK with modulation frequency, depth, FM/PM deviation and FSK hop
+- **Modulation**: AM, FM, PM, ASK, FSK, PSK and burst (pulse count, trigger source, Trigger button) with modulation frequency, depth, FM/PM deviation and FSK hop
   frequency; shows the generator's AM depth as the textbook depth too (they differ, see below).
 - Console for raw commands, with the calibration / flash commands (`w97`, `w98`) blocked.
 
@@ -51,14 +51,17 @@ Pair the Bluetooth module once: `bluetoothctl scan le`, then `pair` / `trust` it
 | 47 / 48 | FM deviation | 0.1 Hz |
 | 49 / 50 | FSK hop frequency | 0.1 Hz |
 | 51 / 52 | PM deviation | 0.1 ° peak-to-peak |
+| 60 | burst trigger source `ch1,ch2` | 0 button, 1 internal, 2 ext AC, 3 ext DC |
+| 61 | burst pulse count `ch1,ch2` | 1 … 100000000 |
+| 74 | write `1,0,0,0` = fire one burst (same as the Trig. key) | one-shot |
 | 64 | sweep `channel,time,direction,mode` | ch 0/1, time 10 ms, dir 0 up / 1 down / 2 round trip, mode 0 lin / 1 log |
 | 65 | sweep running `1,1` / stopped `0,0` | |
 | 66 / 67 | sweep start / end frequency | 0.1 Hz |
 
 Sweep and modulation registers were verified by measuring the output with a scope (spectrum / envelope /
 instantaneous frequency). AM depth: the generator's depth m makes the envelope run from the set amplitude down to
-(1 − m) of it, so the textbook depth (max − min)/(max + min) is m / (2 − m): 70 % set = 53.8 %. Burst, PWM,
-external modulation and amplitude/duty sweep are not mapped yet.
+(1 − m) of it, so the textbook depth (max − min)/(max + min) is m / (2 − m): 70 % set = 53.8 %. PWM, burst idle
+level, external modulation and amplitude/duty sweep are not mapped yet.
 
 ## Tests
 
