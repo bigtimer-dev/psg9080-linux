@@ -1,0 +1,64 @@
+import unittest
+
+from psg9080 import protocol as P
+
+
+class ProtocolTest(unittest.TestCase):
+
+
+    def test_read_write_frames(self):
+        assert P.read_cmd(13) == b":r13=0.\r\n"
+        assert P.write_cmd(14, 12345678, 0) == b":w14=12345678,0.\r\n"
+
+
+    def test_forbidden_writes(self):
+        for reg in (97, 98):
+            with self.assertRaises(P.ProtocolError):
+                P.write_cmd(reg, 1)
+
+
+    def test_parse_and_apply_real_replies(self):
+        s = P.DeviceState()
+        for line in [":r00=80.", ":r01=2490800145.", ":r10=0,1.", ":r11=000.", ":r13=000001000000,1.",
+                     ":r14=000010000000,0.", ":r15=08500.", ":r17=1000.", ":r19=5000.", ":r22=09000."]:
+            kind, reg, fields = P.parse_reply(line)
+            assert kind == "r"
+            s.apply(reg, fields)
+        assert P.parse_reply(":ok")[0] == "ok"
+        c1, c2 = s.ch
+        assert s.model == "80" and s.serial == "2490800145"
+        assert (c1.output, c2.output) == (False, True)
+        assert c1.freq_mhz == 1_000_000 and c1.freq_unit == 1 and c2.freq_mhz == 10_000_000
+        assert c1.ampl_mv == 8500 and c1.offset_v == 0 and c1.duty_pct == 50 and c2.phase_deg == 90
+        assert c1.wave_name == "Sine"
+
+
+    def test_conversions(self):
+        assert P.freq_to_reg(1000) == 1_000_000
+        assert P.freq_to_reg(1e9) == P.FREQ_MAX_MHZ
+        assert P.offset_to_reg(0) == 1000 and P.offset_to_reg(-1.5) == 850 and P.offset_to_reg(99) == 2500
+        assert P.offset_to_reg(-50) == P.OFFSET_MIN
+        assert P.duty_to_reg(50) == 5000 and P.phase_to_reg(450) == 9000
+        assert P.format_freq(1_000_000) == "1 kHz" and P.format_freq(12_345_678) == "12.345678 kHz"
+
+
+    def test_arb(self):
+        norm = P.arb_from_expression("sin(x)")
+        pts = P.arb_to_points(norm)
+        assert len(pts) == 2048 and min(pts) >= 0 and max(pts) == P.ARB_MAX
+        frame = P.arb_upload_cmd(1, pts)
+        assert frame.startswith(b":a01=") and frame.endswith(b".\r\n") and frame.count(b",") == 2047
+        with self.assertRaises(P.ProtocolError):
+            P.arb_from_expression("__import__('os')")
+        with self.assertRaises(P.ProtocolError):
+            P.arb_upload_cmd(0, pts)
+
+
+    def test_parse_freq(self):
+        from psg9080.window import parse_freq
+        assert parse_freq("1k") == 1000 and parse_freq("2.5 MHz") == 2.5e6 and parse_freq("440") == 440
+        assert parse_freq("250 mHz") == 0.25 and parse_freq("1'000.5 Hz") == 1000.5 and parse_freq("abc") is None
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=PSG9080 Signal Generator
+GenericName=Signal Generator
+Comment=Control the Juntek / Joy-IT PSG9080 over Bluetooth LE or USB
+Exec=@BIN@
+Icon=io.github.bigtimer_dev.PSG9080
+Terminal=false
+Categories=Electronics;Engineering;Utility;
+Keywords=signal;generator;function;arbitrary;waveform;PSG9080;Juntek;bluetooth;
+StartupWMClass=io.github.bigtimer_dev.PSG9080
+Actions=usb;
+
+[Desktop Action usb]
+Name=Connect over USB
+Exec=@BIN@ --usb
