@@ -326,7 +326,9 @@ class ArbPage(Gtk.Box):
         def done():
             self.spinner.stop()
             self.upload.set_sensitive(True)
-            self.status.set_label(f"Stored in Arb.{100 + slot}. Select it as waveform on a channel.")
+            self.status.set_label(f"Stored in Arb.{100 + slot}. Note: the generator also switches the active "
+                                  "channel to this waveform.")
+            self.win.gen.read(11, 12)
         self.win.gen.upload_arb(slot, P.arb_to_points(self.norm), cb=done)
 
 
