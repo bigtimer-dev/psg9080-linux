@@ -16,7 +16,14 @@ Sweep (verified on a scope 2026-11-07):
   64 "channel,time,direction,mode"  channel 0=CH1 1=CH2, time in 10 ms, direction 0 up 1 down 2 round trip,
                                     mode 0 linear 1 logarithmic
   65 "1,1" running / "0,0" stopped  66/67 start / end frequency in 0.1 Hz
-  24 front-panel screen: 0,1,0,1 main, 0,6,0,6 sweep. The sweep only runs while the screen is in sweep mode.
+  24 front-panel screen: 0,1,0,1 main, 0,6,0,6 sweep, 0,1,0,12 modulation. Sweep/modulation only run while the
+     screen shows them.
+Modulation (verified on a scope 2026-11-07; odd register = CH1, even = CH2):
+  40 type "ch1,ch2": 0 AM 1 FM 2 PM 3 ASK 4 FSK 5 PSK 6 PWM 7 Burst
+  43/44 modulation frequency in mHz      45/46 AM depth in 0.1 % (also the ASK low level)
+  47/48 FM deviation in 0.1 Hz           49/50 FSK hop frequency in 0.1 Hz
+  51/52 PM deviation in 0.1 deg peak-to-peak
+  AM "depth" m: the envelope runs from the set amplitude down to (1-m) of it; textbook depth = m/(2-m).
 """
 
 from __future__ import annotations
@@ -127,6 +134,26 @@ SWEEP_MODES = ["Linear", "Logarithmic"]
 SWEEP_REGS = [64, 65, 66, 67]
 SCREEN_MAIN = (0, 1, 0, 1)         # register 24 values
 SCREEN_SWEEP = (0, 6, 0, 6)
+SCREEN_MOD = (0, 1, 0, 12)
+
+MOD_TYPES = ["AM", "FM", "PM", "ASK", "FSK", "PSK", "PWM", "Burst"]
+MOD_REGS = [24, 40, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52]
+
+
+@dataclass
+class Modulation:
+    type: int = 0
+    freq_mhz: int = 500_000        # modulation frequency, mHz
+    depth: int = 1000              # AM depth, 0.1 %
+    fm_dev_dhz: int = 10000        # FM deviation, 0.1 Hz
+    hop_dhz: int = 20000           # FSK hop frequency, 0.1 Hz
+    pm_dev: int = 1800             # PM deviation, 0.1 deg peak-to-peak
+
+
+def am_textbook_depth(m: float) -> float:
+    """Generator depth (0..2) -> conventional (max-min)/(max+min) depth."""
+    m = max(0.0, m)
+    return m / (2 - m) if m < 1 else 1.0 if m == 1 else float("inf")
 SWEEP_TIME_MAX = 64000             # 640 s in 10 ms units
 
 
@@ -156,6 +183,8 @@ class DeviceState:
     versions: str = ""
     ch: list[Channel] = field(default_factory=lambda: [Channel(1), Channel(2)])
     sweep: Sweep = field(default_factory=Sweep)
+    mod: list[Modulation] = field(default_factory=lambda: [Modulation(), Modulation()])
+    screen: tuple[int, ...] = ()
 
     def apply(self, reg: int, fields: list[str]) -> None:
         f = [x.strip() for x in fields]
@@ -182,6 +211,14 @@ class DeviceState:
                 self.ch[reg - 19].duty_reg = int(f[0])
             elif reg in (21, 22):
                 self.ch[reg - 21].phase_reg = int(f[0])
+            elif reg == 24:
+                self.screen = tuple(int(x) for x in f)
+            elif reg == 40:
+                self.mod[0].type, self.mod[1].type = int(f[0]), int(f[1])
+            elif 43 <= reg <= 52:
+                m = self.mod[(reg - 43) % 2]
+                attr = ("freq_mhz", "depth", "fm_dev_dhz", "hop_dhz", "pm_dev")[(reg - 43) // 2]
+                setattr(m, attr, int(f[0]))
             elif reg == 64:
                 sw = self.sweep
                 sw.channel, sw.time_cs, sw.direction, sw.log = int(f[0]), int(f[1]), int(f[2]), f[3] == "1"

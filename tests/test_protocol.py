@@ -77,5 +77,23 @@ class SweepTest(unittest.TestCase):
         self.assertEqual(P.hz_to_dhz(1234.0), 12340)
 
 
+class ModulationTest(unittest.TestCase):
+    def test_apply_live_values(self):
+        st = P.DeviceState()
+        for line in (":r24=00,01,00,12.", ":r40=0,0.", ":r43=0000300000.", ":r45=0700.", ":r47=0000020000.",
+                     ":r50=0000050000.", ":r52=1800."):
+            _, reg, fields = P.parse_reply(line)
+            st.apply(reg, fields)
+        self.assertEqual(st.screen, P.SCREEN_MOD)
+        m1, m2 = st.mod
+        self.assertEqual((m1.type, m1.freq_mhz, m1.depth, m1.fm_dev_dhz), (0, 300000, 700, 20000))
+        self.assertEqual((m2.hop_dhz, m2.pm_dev), (50000, 1800))
+
+    def test_am_depth_definition(self):
+        # measured on the scope: 70 % set -> 53.5 %, 100 % -> 99.7 %
+        self.assertAlmostEqual(P.am_textbook_depth(0.7), 0.538, places=3)
+        self.assertEqual(P.am_textbook_depth(1.0), 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -15,6 +15,8 @@ two-channel signal generator. Talks to it over the **BSG145 Bluetooth LE module*
   ~10 s), which is why the app never uses it.
 - **Frequency sweep**: channel, start/end frequency, time (10 ms … 640 s), up / down / round trip, linear / log,
   start/stop, with a frequency-vs-time preview.
+- **Modulation**: AM, FM, PM, ASK, FSK, PSK with modulation frequency, depth, FM/PM deviation and FSK hop
+  frequency; shows the generator's AM depth as the textbook depth too (they differ, see below).
 - Console for raw commands, with the calibration / flash commands (`w97`, `w98`) blocked.
 
 ## Install
@@ -42,13 +44,21 @@ Pair the Bluetooth module once: `bluetoothctl scan le`, then `pair` / `trust` it
 | 19 / 20 | duty | 0.01 % |
 | 21 / 22 | phase | 0.01 ° |
 | 25 | CH2 sync flags: waveform, frequency, amplitude, offset, duty, external | 6 × 0/1 |
-| 24 | front-panel screen (`0,1,0,1` main, `0,6,0,6` sweep; sweep only runs on the sweep screen) | |
+| 24 | front-panel screen: `0,1,0,1` main, `0,6,0,6` sweep, `0,1,0,12` modulation | sweep/modulation only run on their screen |
+| 40 | modulation type `ch1,ch2` | 0 AM, 1 FM, 2 PM, 3 ASK, 4 FSK, 5 PSK, 6 PWM, 7 Burst |
+| 43 / 44 | modulation frequency | mHz |
+| 45 / 46 | AM depth (also ASK low level) | 0.1 % |
+| 47 / 48 | FM deviation | 0.1 Hz |
+| 49 / 50 | FSK hop frequency | 0.1 Hz |
+| 51 / 52 | PM deviation | 0.1 ° peak-to-peak |
 | 64 | sweep `channel,time,direction,mode` | ch 0/1, time 10 ms, dir 0 up / 1 down / 2 round trip, mode 0 lin / 1 log |
 | 65 | sweep running `1,1` / stopped `0,0` | |
 | 66 / 67 | sweep start / end frequency | 0.1 Hz |
 
-Sweep registers were verified by watching the output on a scope. Modulation and burst (registers 40–63) are
-still being mapped.
+Sweep and modulation registers were verified by measuring the output with a scope (spectrum / envelope /
+instantaneous frequency). AM depth: the generator's depth m makes the envelope run from the set amplitude down to
+(1 − m) of it, so the textbook depth (max − min)/(max + min) is m / (2 − m): 70 % set = 53.8 %. Burst, PWM,
+external modulation and amplitude/duty sweep are not mapped yet.
 
 ## Tests
 

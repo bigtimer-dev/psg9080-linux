@@ -477,6 +477,148 @@ class SweepPage(Gtk.Box):
         cr.show_text(f"{sw.time_cs / 100:g} s")
 
 
+class ModPage(Gtk.Box):
+    """Internal modulation (registers 40, 43-52). Burst / PWM / external source are panel-only for now."""
+
+    def __init__(self, win: "MainWindow") -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12,
+                         margin_top=12, margin_bottom=12, margin_start=12, margin_end=12)
+        self.win = win
+        self._loading = False
+        clamp = Adw.Clamp(maximum_size=640)
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        clamp.set_child(page)
+        self.append(clamp)
+
+        g = Adw.PreferencesGroup(title="Modulation",
+                                 description="Internal sine modulation source. Values apply on Enter; the "
+                                             "generator stores them per channel.")
+        self.run = Adw.SwitchRow(title="Modulation on", subtitle="switches the generator screen to modulation")
+        self.run.connect("notify::active", self._on_run)
+        g.add(self.run)
+        self.chan = Adw.ComboRow(title="Channel", model=Gtk.StringList.new(["CH1", "CH2"]))
+        self.chan.connect("notify::selected", lambda *_: self.refresh())
+        g.add(self.chan)
+        self.type = Adw.ComboRow(title="Type", model=Gtk.StringList.new(P.MOD_TYPES[:6]))
+        self.type.connect("notify::selected", self._on_type)
+        g.add(self.type)
+        page.append(g)
+
+        p = Adw.PreferencesGroup(title="Parameters")
+        self.freq = Adw.EntryRow(title="Modulation frequency (e.g. 300 Hz)", show_apply_button=True)
+        self.depth = Adw.EntryRow(title="AM depth / ASK level, % (0–200)", show_apply_button=True)
+        self.fm_dev = Adw.EntryRow(title="FM deviation", show_apply_button=True)
+        self.hop = Adw.EntryRow(title="FSK hop frequency", show_apply_button=True)
+        self.pm_dev = Adw.EntryRow(title="PM deviation, degrees peak-to-peak", show_apply_button=True)
+        self.note = Gtk.Label(xalign=0, wrap=True, css_classes=["dim-label", "caption"], margin_top=6)
+        for row, fn in ((self.freq, self._on_freq), (self.depth, self._on_depth), (self.fm_dev, self._on_fm),
+                        (self.hop, self._on_hop), (self.pm_dev, self._on_pm)):
+            row.connect("apply", lambda r, f=fn: f(r))
+            row.connect("entry-activated", lambda r, f=fn: f(r))
+            p.add(row)
+        page.append(p)
+        page.append(self.note)
+        self.connect("map", lambda *_: self.refresh_now())
+
+    @property
+    def ch(self) -> int:
+        return self.chan.get_selected()
+
+    def _reg(self, base: int) -> int:
+        return base + self.ch
+
+    def refresh_now(self) -> None:
+        if self.win.gen.connected:
+            self.win.gen.read(*P.MOD_REGS)
+
+    def refresh(self) -> None:
+        st = self.win.gen.state
+        m = st.mod[self.ch]
+        self._loading = True
+        try:
+            self.run.set_active(st.screen == P.SCREEN_MOD)
+            if m.type < 6:
+                self.type.set_selected(m.type)
+            for row, text in ((self.freq, P.format_freq(m.freq_mhz)), (self.depth, f"{m.depth / 10:g}"),
+                              (self.fm_dev, P.format_freq(m.fm_dev_dhz * 100)),
+                              (self.hop, P.format_freq(m.hop_dhz * 100)), (self.pm_dev, f"{m.pm_dev / 10:g}")):
+                if not row.has_focus():
+                    row.set_text(text)
+        finally:
+            self._loading = False
+        name = P.MOD_TYPES[m.type] if m.type < len(P.MOD_TYPES) else f"#{m.type}"
+        self.depth.set_visible(m.type in (0, 3))
+        self.fm_dev.set_visible(m.type == 1)
+        self.pm_dev.set_visible(m.type == 2)
+        self.hop.set_visible(m.type == 4)
+        notes = {0: f"Generator depth {m.depth / 10:g} % = textbook depth "
+                    f"{P.am_textbook_depth(m.depth / 1000) * 100:.1f} %: the envelope runs from the set amplitude "
+                    f"down to {max(0.0, 100 - m.depth / 10):g} % of it.",
+                 3: "ASK switches between the set amplitude and (100 − depth) % of it at the modulation frequency.",
+                 4: "FSK hops between the carrier and the hop frequency at the modulation frequency.",
+                 5: "PSK flips the phase by 180° at the modulation frequency."}
+        self.note.set_label(notes.get(m.type, f"{name}: set its parameters on the front panel for now."))
+
+    # -- UI -> device
+    def _write(self, base: int, value: int) -> None:
+        reg = self._reg(base)
+        self.win.gen.write(reg, value, cb=lambda: self.win.gen.read(reg))
+
+    def _on_run(self, *_a) -> None:
+        if self._loading:
+            return
+        g = self.win.gen
+        g.write(24, *(P.SCREEN_MOD if self.run.get_active() else P.SCREEN_MAIN), cb=lambda: g.read(24))
+
+    def _on_type(self, *_a) -> None:
+        if self._loading:
+            return
+        types = [m.type for m in self.win.gen.state.mod]
+        types[self.ch] = self.type.get_selected()
+        self.win.gen.write(40, *types, cb=lambda: self.win.gen.read(40))
+
+    def _freq_entry(self, row) -> float | None:
+        hz = parse_freq(row.get_text())
+        if hz is None or hz < 0:
+            self.win.toast("Invalid frequency")
+        return hz
+
+    def _number(self, row, lo: float, hi: float) -> float | None:
+        try:
+            v = float(row.get_text().replace(",", ".").rstrip("%° "))
+        except ValueError:
+            v = None
+        if v is None or not lo <= v <= hi:
+            self.win.toast(f"Enter a number from {lo:g} to {hi:g}")
+            return None
+        return v
+
+    def _on_freq(self, row) -> None:
+        hz = self._freq_entry(row)
+        if hz is not None:
+            self._write(43, P.freq_to_reg(hz))
+
+    def _on_depth(self, row) -> None:
+        v = self._number(row, 0, 200)
+        if v is not None:
+            self._write(45, int(round(v * 10)))
+
+    def _on_fm(self, row) -> None:
+        hz = self._freq_entry(row)
+        if hz is not None:
+            self._write(47, P.hz_to_dhz(hz))
+
+    def _on_hop(self, row) -> None:
+        hz = self._freq_entry(row)
+        if hz is not None:
+            self._write(49, P.hz_to_dhz(hz))
+
+    def _on_pm(self, row) -> None:
+        v = self._number(row, 0, 360)
+        if v is not None:
+            self._write(51, int(round(v * 10)))
+
+
 class ConsolePage(Gtk.Box):
     def __init__(self, win: "MainWindow") -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8,
@@ -738,6 +880,8 @@ class MainWindow(Adw.ApplicationWindow):
         self.stack.add_titled_with_icon(self.arb, "arb", "Arbitrary", "document-edit-symbolic")
         self.sweep = SweepPage(self)
         self.stack.add_titled_with_icon(self.sweep, "sweep", "Sweep", "media-seek-forward-symbolic")
+        self.mod = ModPage(self)
+        self.stack.add_titled_with_icon(self.mod, "mod", "Modulation", "network-wireless-signal-good-symbolic")
         self.bode = BodePage(self)
         self.stack.add_titled_with_icon(self.bode, "bode", "Bode", "utilities-system-monitor-symbolic")
         self.console = ConsolePage(self)
@@ -764,6 +908,7 @@ class MainWindow(Adw.ApplicationWindow):
         for p in self.panels:
             p.refresh()
         self.sweep.refresh()
+        self.mod.refresh()
         s = self.gen.state
         if s.model:
             self.info_label.set_label(f"PSG90{s.model}  ·  S/N {s.serial}  ·  versions {s.versions}")
@@ -773,8 +918,11 @@ class MainWindow(Adw.ApplicationWindow):
         if connected:
             self.gen.read(*P.INFO_REGS)
             self.gen.read(*P.POLL_REGS)
-            if self.stack.get_visible_child_name() == "sweep":
+            page = self.stack.get_visible_child_name()
+            if page == "sweep":
                 self.sweep.refresh_now()
+            elif page == "mod":
+                self.mod.refresh_now()
             if self._poll_id is None:
                 self._poll_id = GLib.timeout_add(POLL_MS, self._poll)
         for p in self.panels:
@@ -783,8 +931,11 @@ class MainWindow(Adw.ApplicationWindow):
     def _poll(self) -> bool:
         if self.gen.connected and self.sync_btn.get_active() and self.gen.pending() == 0:
             self.gen.read(*P.POLL_REGS)
-            if self.stack.get_visible_child_name() == "sweep":
+            page = self.stack.get_visible_child_name()
+            if page == "sweep":
                 self.gen.read(*P.SWEEP_REGS)
+            elif page == "mod":
+                self.gen.read(*P.MOD_REGS)
         return True
 
     def _on_close(self, *_a) -> bool:
