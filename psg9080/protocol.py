@@ -31,7 +31,7 @@ Modulation (verified on a scope 2026-11-07; odd register = CH1, even = CH2):
   0 zero 1 +max 2 -max.
 Measurement input EXT IN (verified 2026-11-07): screen 0,4,0,1 measure, 0,5,0,2 counter (counting is started with
   the panel's ON key). 80 count, 81 frequency Hz, 83/84 positive/negative width ns, 85 period ns, 86 duty 0.01 %.
-  Values freeze when the screen is left. Never write 76: it switches to another mode and turns the outputs off.
+  Values freeze when the screen is left. Never write 76: it starts Programming mode, which loads memory M00 over the live settings.
   "PWM" (type 6) is a precision pulse generator on its own screen 0,1,0,8: 53/54 pulse width in 1 ns,
   55/56 period in 10 ns, 57 "ch1,ch2" inverted output.
   AM "depth" m: the envelope runs from the set amplitude down to (1-m) of it; textbook depth = m/(2-m).
@@ -60,7 +60,7 @@ DUTY_MAX = 9999
 PHASE_MOD = 36000
 
 # Registers that change calibration or rewrite internal flash / reboot: never sent by this app.
-# 76 switches the panel to another mode and turns the outputs off (seen 2026-11-07).
+# 76 starts Programming mode: program P00 loads memory M00 over the live settings (seen 2026-11-07).
 FORBIDDEN_WRITES = {76, 97, 98}
 
 _REPLY = re.compile(r"^:(?:([a-zA-Z])(\d\d)=(.*?)\.?|(ok))$")
