@@ -1,6 +1,6 @@
 """PSG9080 serial protocol (same text protocol over USB CH340 and the BSG145/CH9141 BLE module).
 
-Worked out by observing the device (USB and BLE traffic) and live tests on the bench.
+Register meanings checked with live tests on the bench (scope and multimeter).
 
 Frame:  ':' letter NN '=' v1 ',' v2 ... '.' '\\r\\n'      NN = two decimal digits
   r = read register NN        -> ':rNN=<fields>.\\r\\n'
