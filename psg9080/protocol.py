@@ -1,6 +1,6 @@
 """PSG9080 serial protocol (same text protocol over USB CH340 and the BSG145/CH9141 BLE module).
 
-Recovered from the 2021-03-10 firmware (USART1 parser @0x0801D128, dispatcher @0x0801D450) and live tests.
+Worked out by observing the device (USB and BLE traffic) and live tests on the bench.
 
 Frame:  ':' letter NN '=' v1 ',' v2 ... '.' '\\r\\n'      NN = two decimal digits
   r = read register NN        -> ':rNN=<fields>.\\r\\n'
@@ -27,7 +27,7 @@ Modulation (verified on a scope 2026-11-07; odd register = CH1, even = CH2):
   47/48 FM deviation in 0.1 Hz           49/50 FSK hop frequency in 0.1 Hz
   51/52 PM deviation in 0.1 deg peak-to-peak
   Burst: 61 pulse count "ch1,ch2" (1..100000000); 60 trigger source "ch1,ch2" 0 button 1 internal (2 ext AC,
-  3 ext DC per firmware range); w74=1,0,0,0 fires a manual burst (one-shot); 58 idle level "ch1,ch2"
+  3 ext DC); w74=1,0,0,0 fires a manual burst (one-shot); 58 idle level "ch1,ch2"
   0 zero 1 +max 2 -max.
 Measurement input EXT IN (verified 2026-11-07): screen 0,4,0,1 measure, 0,5,0,2 counter (counting is started with
   the panel's ON key). 80 count, 81 frequency Hz, 83/84 positive/negative width ns, 85 period ns, 86 duty 0.01 %.
@@ -50,12 +50,12 @@ WAVEFORMS = [
 ]
 ARB_FIRST = 101          # waveform numbers >= 101 select arbitrary slots ("Arb.101" ...)
 ARB_POINTS = 2048
-ARB_MAX = 0x3FFF         # 14-bit full scale used by the firmware for ':a' uploads
+ARB_MAX = 0x3FFF         # 14-bit full scale used by the device for ':a' uploads
 
 FREQ_MAX_MHZ = 80_000_000_000      # 80 MHz in mHz
 AMPL_MAX_MV = 25_000
 OFFSET_ZERO = 1000                 # register value for 0 V
-OFFSET_MIN, OFFSET_MAX = 1, 2500   # firmware clamps to 2500; 0 is treated specially, avoid it
+OFFSET_MIN, OFFSET_MAX = 1, 2500   # the device clamps to 2500; 0 is treated specially, avoid it
 DUTY_MAX = 9999
 PHASE_MOD = 36000
 

@@ -31,7 +31,7 @@ two-channel signal generator. Talks to it over the **BSG145 Bluetooth LE module*
 
 Pair the Bluetooth module once: `bluetoothctl scan le`, then `pair` / `trust` its address.
 
-## Protocol (from the firmware, see `psg9080/protocol.py`)
+## Protocol (see `psg9080/protocol.py`)
 
 `:` letter NN `=` values `.` CRLF. `rNN` read, `wNN` write (`:ok` reply), `aNN` 2048-point arbitrary upload
 (0…16383), `bNN` read an arbitrary slot back (16-bit scaled).
