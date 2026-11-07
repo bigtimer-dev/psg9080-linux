@@ -26,6 +26,8 @@ Modulation (verified on a scope 2026-11-07; odd register = CH1, even = CH2):
   Burst: 61 pulse count "ch1,ch2" (1..100000000); 60 trigger source "ch1,ch2" 0 button 1 internal (2 ext AC,
   3 ext DC per firmware range); w74=1,0,0,0 fires a manual burst (one-shot); 58 idle level "ch1,ch2"
   0 zero 1 +max 2 -max.
+  "PWM" (type 6) is a precision pulse generator on its own screen 0,1,0,8: 53/54 pulse width in 1 ns,
+  55/56 period in 10 ns, 57 "ch1,ch2" inverted output.
   AM "depth" m: the envelope runs from the set amplitude down to (1-m) of it; textbook depth = m/(2-m).
 """
 
@@ -138,9 +140,10 @@ SWEEP_REGS = [64, 65, 66, 67]
 SCREEN_MAIN = (0, 1, 0, 1)         # register 24 values
 SCREEN_SWEEP = (0, 6, 0, 6)
 SCREEN_MOD = (0, 1, 0, 12)
+SCREEN_PWM = (0, 1, 0, 8)
 
 MOD_TYPES = ["AM", "FM", "PM", "ASK", "FSK", "PSK", "PWM", "Burst"]
-MOD_REGS = [24, 40, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 58, 60, 61]
+MOD_REGS = [24, 40] + list(range(43, 59)) + [60, 61]
 BURST_IDLE = ["Zero", "Positive maximum", "Negative maximum"]
 BURST_SOURCES = ["Button / app", "Internal", "External AC", "External DC"]
 BURST_MAX = 100_000_000
@@ -158,6 +161,13 @@ class Modulation:
     burst_count: int = 1
     burst_source: int = 0
     burst_idle: int = 0
+    pulse_width_ns: int = 100
+    pulse_period_10ns: int = 1000
+    pulse_inverted: bool = False
+
+
+def mod_screen(mod_type: int) -> tuple[int, ...]:
+    return SCREEN_PWM if mod_type == 6 else SCREEN_MOD
 
 
 def am_textbook_depth(m: float) -> float:
@@ -225,6 +235,12 @@ class DeviceState:
                 self.screen = tuple(int(x) for x in f)
             elif reg == 40:
                 self.mod[0].type, self.mod[1].type = int(f[0]), int(f[1])
+            elif reg in (53, 54):
+                self.mod[reg - 53].pulse_width_ns = int(f[0])
+            elif reg in (55, 56):
+                self.mod[reg - 55].pulse_period_10ns = int(f[0])
+            elif reg == 57:
+                self.mod[0].pulse_inverted, self.mod[1].pulse_inverted = f[0] == "1", f[1] == "1"
             elif 43 <= reg <= 52:
                 m = self.mod[(reg - 43) % 2]
                 attr = ("freq_mhz", "depth", "fm_dev_dhz", "hop_dhz", "pm_dev")[(reg - 43) // 2]

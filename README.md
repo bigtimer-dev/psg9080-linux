@@ -15,7 +15,7 @@ two-channel signal generator. Talks to it over the **BSG145 Bluetooth LE module*
   ~10 s), which is why the app never uses it.
 - **Frequency sweep**: channel, start/end frequency, time (10 ms … 640 s), up / down / round trip, linear / log,
   start/stop, with a frequency-vs-time preview.
-- **Modulation**: AM, FM, PM, ASK, FSK, PSK and burst (pulse count, trigger source, Trigger button) with modulation frequency, depth, FM/PM deviation and FSK hop
+- **Modulation**: AM, FM, PM, ASK, FSK, PSK, pulse mode ("PWM": exact pulse width / period / invert) and burst (pulse count, trigger source, Trigger button) with modulation frequency, depth, FM/PM deviation and FSK hop
   frequency; shows the generator's AM depth as the textbook depth too (they differ, see below).
 - Console for raw commands, with the calibration / flash commands (`w97`, `w98`) blocked.
 
@@ -44,7 +44,7 @@ Pair the Bluetooth module once: `bluetoothctl scan le`, then `pair` / `trust` it
 | 19 / 20 | duty | 0.01 % |
 | 21 / 22 | phase | 0.01 ° |
 | 25 | CH2 sync flags: waveform, frequency, amplitude, offset, duty, external | 6 × 0/1 |
-| 24 | front-panel screen: `0,1,0,1` main, `0,6,0,6` sweep, `0,1,0,12` modulation | sweep/modulation only run on their screen |
+| 24 | front-panel screen: `0,1,0,1` main, `0,6,0,6` sweep, `0,1,0,12` modulation, `0,1,0,8` pulse ("PWM") | sweep/modulation only run on their screen |
 | 40 | modulation type `ch1,ch2` | 0 AM, 1 FM, 2 PM, 3 ASK, 4 FSK, 5 PSK, 6 PWM, 7 Burst |
 | 43 / 44 | modulation frequency | mHz |
 | 45 / 46 | AM depth (also ASK low level) | 0.1 % |
@@ -52,6 +52,9 @@ Pair the Bluetooth module once: `bluetoothctl scan le`, then `pair` / `trust` it
 | 49 / 50 | FSK hop frequency | 0.1 Hz |
 | 51 / 52 | PM deviation | 0.1 ° peak-to-peak |
 | 60 | burst trigger source `ch1,ch2` | 0 button, 1 internal, 2 ext AC, 3 ext DC |
+| 53 / 54 | pulse ("PWM") width | 1 ns |
+| 55 / 56 | pulse ("PWM") period | 10 ns |
+| 57 | pulse ("PWM") inverted `ch1,ch2` | 0/1 |
 | 58 | burst idle level `ch1,ch2` | 0 zero, 1 +max, 2 −max |
 | 61 | burst pulse count `ch1,ch2` | 1 … 100000000 |
 | 74 | write `1,0,0,0` = fire one burst (same as the Trig. key) | one-shot |
@@ -61,8 +64,7 @@ Pair the Bluetooth module once: `bluetoothctl scan le`, then `pair` / `trust` it
 
 Sweep and modulation registers were verified by measuring the output with a scope (spectrum / envelope /
 instantaneous frequency). AM depth: the generator's depth m makes the envelope run from the set amplitude down to
-(1 − m) of it, so the textbook depth (max − min)/(max + min) is m / (2 − m): 70 % set = 53.8 %. PWM (its carrier is not
-the channel frequency; not understood yet), external modulation and amplitude/duty sweep are not mapped yet.
+(1 − m) of it, so the textbook depth (max − min)/(max + min) is m / (2 − m): 70 % set = 53.8 %. External modulation and amplitude/duty sweep are not mapped yet.
 
 ## Tests
 

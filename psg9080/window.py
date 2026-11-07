@@ -499,7 +499,7 @@ class ModPage(Gtk.Box):
         self.chan = Adw.ComboRow(title="Channel", model=Gtk.StringList.new(["CH1", "CH2"]))
         self.chan.connect("notify::selected", lambda *_: self.refresh())
         g.add(self.chan)
-        self.type = Adw.ComboRow(title="Type", model=Gtk.StringList.new(P.MOD_TYPES[:6] + ["Burst"]))
+        self.type = Adw.ComboRow(title="Type", model=Gtk.StringList.new(P.MOD_TYPES[:6] + ["Pulse (PWM)", "Burst"]))
         self.type.connect("notify::selected", self._on_type)
         g.add(self.type)
         page.append(g)
@@ -515,6 +515,16 @@ class ModPage(Gtk.Box):
                         (self.hop, self._on_hop), (self.pm_dev, self._on_pm)):
             row.connect("apply", lambda r, f=fn: f(r))
             row.connect("entry-activated", lambda r, f=fn: f(r))
+            p.add(row)
+        self.p_width = Adw.EntryRow(title="Pulse width, µs (0.001 … 4000000)", show_apply_button=True)
+        self.p_period = Adw.EntryRow(title="Pulse period, µs (0.01 … 40000000)", show_apply_button=True)
+        self.p_inv = Adw.SwitchRow(title="Inverted output")
+        self.p_width.connect("apply", self._on_p_width)
+        self.p_width.connect("entry-activated", self._on_p_width)
+        self.p_period.connect("apply", self._on_p_period)
+        self.p_period.connect("entry-activated", self._on_p_period)
+        self.p_inv.connect("notify::active", self._on_p_inv)
+        for row in (self.p_width, self.p_period, self.p_inv):
             p.add(row)
         self.burst_count = Adw.SpinRow(title="Burst pulses", digits=0, adjustment=Gtk.Adjustment(
             lower=1, upper=P.BURST_MAX, step_increment=1, page_increment=10, value=1))
@@ -551,15 +561,18 @@ class ModPage(Gtk.Box):
         m = st.mod[self.ch]
         self._loading = True
         try:
-            self.run.set_active(st.screen == P.SCREEN_MOD)
-            if m.type < 6:
+            self.run.set_active(st.screen in (P.SCREEN_MOD, P.SCREEN_PWM))
+            if m.type <= 7:
                 self.type.set_selected(m.type)
-            elif m.type == 7:
-                self.type.set_selected(6)
             if not self._btid:
                 self.burst_count.set_value(max(1, m.burst_count))
             self.burst_src.set_selected(min(m.burst_source, 3))
             self.burst_idle.set_selected(min(m.burst_idle, 2))
+            if not self.p_width.has_focus():
+                self.p_width.set_text(f"{m.pulse_width_ns / 1000:g}")
+            if not self.p_period.has_focus():
+                self.p_period.set_text(f"{m.pulse_period_10ns / 100:g}")
+            self.p_inv.set_active(m.pulse_inverted)
             for row, text in ((self.freq, P.format_freq(m.freq_mhz)), (self.depth, f"{m.depth / 10:g}"),
                               (self.fm_dev, P.format_freq(m.fm_dev_dhz * 100)),
                               (self.hop, P.format_freq(m.hop_dhz * 100)), (self.pm_dev, f"{m.pm_dev / 10:g}")):
@@ -574,6 +587,9 @@ class ModPage(Gtk.Box):
         self.hop.set_visible(m.type == 4)
         for row in (self.burst_count, self.burst_src, self.burst_idle):
             row.set_visible(m.type == 7)
+        for row in (self.p_width, self.p_period, self.p_inv):
+            row.set_visible(m.type == 6)
+        self.freq.set_visible(m.type != 6)
         self.trig_row.set_visible(m.type == 7 and m.burst_source == 0)
         notes = {0: f"Generator depth {m.depth / 10:g} % = textbook depth "
                     f"{P.am_textbook_depth(m.depth / 1000) * 100:.1f} %: the envelope runs from the set amplitude "
@@ -581,6 +597,8 @@ class ModPage(Gtk.Box):
                  3: "ASK switches between the set amplitude and (100 − depth) % of it at the modulation frequency.",
                  4: "FSK hops between the carrier and the hop frequency at the modulation frequency.",
                  5: "PSK flips the phase by 180° at the modulation frequency.",
+                 6: "Pulse mode (the panel calls it PWM): a pulse train with an exact width and period, "
+                    f"duty {m.pulse_width_ns / max(1, m.pulse_period_10ns * 10) * 100:.2f} %. Uses its own screen.",
                  7: "Burst outputs the set number of carrier cycles per trigger. Internal trigger repeats at the "
                     "modulation frequency rate; keep the burst shorter than the trigger period."}
         self.note.set_label(notes.get(m.type, f"{name}: set its parameters on the front panel for now."))
@@ -594,15 +612,18 @@ class ModPage(Gtk.Box):
         if self._loading:
             return
         g = self.win.gen
-        g.write(24, *(P.SCREEN_MOD if self.run.get_active() else P.SCREEN_MAIN), cb=lambda: g.read(24))
+        screen = P.mod_screen(g.state.mod[self.ch].type) if self.run.get_active() else P.SCREEN_MAIN
+        g.write(24, *screen, cb=lambda: g.read(24))
 
     def _on_type(self, *_a) -> None:
         if self._loading:
             return
         types = [m.type for m in self.win.gen.state.mod]
-        sel = self.type.get_selected()
-        types[self.ch] = 7 if sel == 6 else sel
-        self.win.gen.write(40, *types, cb=lambda: self.win.gen.read(40))
+        types[self.ch] = self.type.get_selected()
+        g = self.win.gen
+        g.write(40, *types, cb=lambda: g.read(40))
+        if g.state.screen in (P.SCREEN_MOD, P.SCREEN_PWM):
+            g.write(24, *P.mod_screen(types[self.ch]), cb=lambda: g.read(24))
 
     def _debounce_burst(self) -> None:
         if self._loading:
@@ -624,6 +645,23 @@ class ModPage(Gtk.Box):
         srcs = [m.burst_source for m in self.win.gen.state.mod]
         srcs[self.ch] = self.burst_src.get_selected()
         self.win.gen.write(60, *srcs, cb=lambda: self.win.gen.read(60))
+
+    def _on_p_width(self, row) -> None:
+        v = self._number(row, 0.001, 4_000_000)
+        if v is not None:
+            self._write(53, int(round(v * 1000)))
+
+    def _on_p_period(self, row) -> None:
+        v = self._number(row, 0.01, 40_000_000)
+        if v is not None:
+            self._write(55, int(round(v * 100)))
+
+    def _on_p_inv(self, *_a) -> None:
+        if self._loading:
+            return
+        inv = [int(m.pulse_inverted) for m in self.win.gen.state.mod]
+        inv[self.ch] = int(self.p_inv.get_active())
+        self.win.gen.write(57, *inv, cb=lambda: self.win.gen.read(57))
 
     def _on_burst_idle(self, *_a) -> None:
         if self._loading:

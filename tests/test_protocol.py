@@ -98,6 +98,16 @@ class ModulationTest(unittest.TestCase):
         self.assertEqual((st.mod[0].burst_idle, st.mod[1].burst_idle), (0, 2))
         self.assertEqual(P.write_cmd(74, *P.BURST_TRIGGER), b":w74=1,0,0,0.\r\n")
 
+    def test_pulse_mode(self):
+        st = P.DeviceState()
+        for line in (":r24=00,01,00,08.", ":r40=6,0.", ":r53=0000005000.", ":r55=0000002000.", ":r57=1,0."):
+            _, reg, fields = P.parse_reply(line)
+            st.apply(reg, fields)
+        m = st.mod[0]
+        self.assertEqual((m.pulse_width_ns, m.pulse_period_10ns, m.pulse_inverted), (5000, 2000, True))
+        self.assertEqual(st.screen, P.mod_screen(6))
+        self.assertEqual(P.mod_screen(0), P.SCREEN_MOD)
+
     def test_am_depth_definition(self):
         # measured on the scope: 70 % set -> 53.5 %, 100 % -> 99.7 %
         self.assertAlmostEqual(P.am_textbook_depth(0.7), 0.538, places=3)
