@@ -152,7 +152,7 @@ class ChannelPanel(Gtk.Box):
 
         self.ampl = self._spin(group, "Amplitude", "Vpp", 0, 25, 0.001, 3, "ampl")
         self.offset = self._spin(group, "Offset", "V", -9.99, 15, 0.01, 2, "offset")
-        self.duty = self._spin(group, "Duty cycle", "%  (broken ≥ 1 MHz in FPGA 1.20)", 0, 99.99, 0.01, 2, "duty")
+        self.duty = self._spin(group, "Duty cycle", "%  (Pulse waveform; Square stays 50 %)", 0, 99.99, 0.01, 2, "duty")
         self.phase = self._spin(group, "Phase", "°", 0, 359.99, 0.01, 2, "phase")
         self.append(group)
 
@@ -581,6 +581,10 @@ class ModPage(Gtk.Box):
         self.shape = Adw.ComboRow(title="Modulating shape", model=Gtk.StringList.new(P.MOD_SHAPES))
         self.shape.connect("notify::selected", self._on_pair, 41, "shape")
         g.add(self.shape)
+        self.polar = Adw.ComboRow(title="Polarity", model=Gtk.StringList.new(["Positive", "Negative"]),
+                                  subtitle="which level of the modulating signal selects the keyed state")
+        self.polar.connect("notify::selected", self._on_polar)
+        g.add(self.polar)
         page.append(g)
 
         p = Adw.PreferencesGroup(title="Parameters")
@@ -649,6 +653,7 @@ class ModPage(Gtk.Box):
             self.burst_idle.set_selected(min(m.burst_idle, 2))
             self.source.set_selected(int(m.external))
             self.shape.set_selected(min(m.shape, 3))
+            self.polar.set_selected(int(m.negative))
             if not self.p_width.has_focus():
                 self.p_width.set_text(f"{m.pulse_width_ns / 1000:g}")
             if not self.p_period.has_focus():
@@ -663,8 +668,11 @@ class ModPage(Gtk.Box):
             self._loading = False
         name = P.MOD_TYPES[m.type] if m.type < len(P.MOD_TYPES) else f"#{m.type}"
         self.depth.set_visible(m.type in (0, 3))
+        self.depth.set_title("ASK level, % (0–200)" if m.type == 3 else "AM depth, % (0–200)")
         self.fm_dev.set_visible(m.type == 1)
-        self.pm_dev.set_visible(m.type == 2)
+        self.pm_dev.set_visible(m.type in (2, 5))
+        self.pm_dev.set_title("PSK phase shift, degrees" if m.type == 5 else "PM deviation, degrees peak-to-peak")
+        self.polar.set_visible(m.type in (3, 4, 5))
         self.hop.set_visible(m.type == 4)
         for row in (self.burst_count, self.burst_src, self.burst_idle):
             row.set_visible(m.type == 7)
@@ -680,7 +688,7 @@ class ModPage(Gtk.Box):
                     f"down to {max(0.0, 100 - m.depth / 10):g} % of it.",
                  3: "ASK switches between the set amplitude and (100 − depth) % of it at the modulation frequency.",
                  4: "FSK hops between the carrier and the hop frequency at the modulation frequency.",
-                 5: "PSK flips the phase by 180° at the modulation frequency.",
+                 5: f"PSK shifts the phase by {m.pm_dev / 10:g}° at the modulation frequency.",
                  6: "Pulse mode (the panel calls it PWM): a pulse train with an exact width and period, "
                     f"duty {m.pulse_width_ns / max(1, m.pulse_period_10ns * 10) * 100:.2f} %. Uses its own screen.",
                  7: "Burst outputs the set number of carrier cycles per trigger. Internal trigger repeats at the "
@@ -741,6 +749,13 @@ class ModPage(Gtk.Box):
         vals = [int(m.external) if attr == "source" else m.shape for m in mods]
         vals[self.ch] = row.get_selected()
         self.win.gen.write(reg, *vals, cb=lambda: self.win.gen.read(reg))
+
+    def _on_polar(self, *_a) -> None:
+        if self._loading:
+            return
+        vals = [int(m.negative) for m in self.win.gen.state.mod]
+        vals[self.ch] = self.polar.get_selected()
+        self.win.gen.write(59, *vals, cb=lambda: self.win.gen.read(59))
 
     def _on_p_width(self, row) -> None:
         v = self._number(row, 0.001, 4_000_000)
@@ -834,11 +849,33 @@ class MeasurePage(Gtk.Box):
         clamp.set_child(page)
         self.append(clamp)
         g = Adw.PreferencesGroup(title="EXT IN measurement",
-                                 description="Signal into EXT IN: 1 Hz – 100 MHz, 2 – 20 Vpp. Gate time and coupling "
-                                             "are set on the panel.")
+                                 description="Signal into EXT IN: 1 Hz – 100 MHz, 2 – 20 Vpp.")
         self.mode = Adw.ComboRow(title="Mode", model=Gtk.StringList.new(["Off", "Measure", "Counter"]))
         self.mode.connect("notify::selected", self._on_mode)
         g.add(self.mode)
+        self.coupling = Adw.ComboRow(title="Coupling", model=Gtk.StringList.new(P.MEAS_COUPLING))
+        self.coupling.connect("notify::selected", lambda *_: self._send_settings())
+        g.add(self.coupling)
+        self.gate = Adw.SpinRow(title="Gate time", subtitle="seconds; longer = more digits", digits=3,
+                                adjustment=Gtk.Adjustment(lower=0.001, upper=10, step_increment=0.1,
+                                                          page_increment=1, value=1))
+        self.gate.connect("notify::value", self._on_gate)
+        g.add(self.gate)
+        self.range = Adw.ComboRow(title="Frequency range", model=Gtk.StringList.new(P.MEAS_MODES),
+                                  subtitle="Low measures the period: better resolution below 2 kHz")
+        self.range.connect("notify::selected", lambda *_: self._send_settings())
+        g.add(self.range)
+        self.cnt_row = Adw.ActionRow(title="Counter")
+        box = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
+        for label, run, reset, style in (("Start", True, False, "suggested-action"), ("Stop", False, False, None),
+                                         ("Reset", None, True, None)):
+            b = Gtk.Button(label=label, css_classes=[style] if style else [])
+            b.connect("clicked", self._on_counter, run, reset)
+            box.append(b)
+        self.cnt_row.add_suffix(box)
+        g.add(self.cnt_row)
+        self._counting = False
+        self._gid = 0
         page.append(g)
         self.big = Gtk.Label(label="—", css_classes=["freq-big"], xalign=0.5)
         page.append(self.big)
@@ -867,8 +904,16 @@ class MeasurePage(Gtk.Box):
         self._loading = True
         try:
             self.mode.set_selected(mode)
+            self.coupling.set_selected(int(m.dc))
+            self.range.set_selected(int(m.low_freq))
+            if not self._gid:
+                self.gate.set_value(max(1, m.gate_ms) / 1000)
         finally:
             self._loading = False
+        self.gate.set_visible(mode == 1)
+        self.range.set_visible(mode == 1)
+        self.coupling.set_visible(mode != 0)
+        self.cnt_row.set_visible(mode == 2)
         for key in ("period", "pos", "neg", "duty"):
             self.rows[key][0].set_visible(mode == 1)
         self.rows["count"][0].set_visible(mode == 2)
@@ -883,10 +928,37 @@ class MeasurePage(Gtk.Box):
         elif mode == 2:
             self.big.set_label(f"{m.count:,}".replace(",", " "))
             self.rows["count"][1].set_label(f"{m.count}")
-            self.note.set_label("Start / stop / reset counting with ON, OFF and RST on the panel.")
+            self.note.set_label("Counts the periods of the EXT IN signal while started.")
         else:
             self.big.set_label("—")
             self.note.set_label("")
+
+    def _send_settings(self) -> None:
+        if self._loading:
+            return
+        st = self.win.gen.state.meas
+        m = P.Measurement(dc=bool(self.coupling.get_selected()), gate_ms=int(round(self.gate.get_value() * 1000)),
+                          low_freq=bool(self.range.get_selected()))
+        st.dc, st.gate_ms, st.low_freq = m.dc, m.gate_ms, m.low_freq
+        self.win.gen.write(62, *P.meas_settings_cmd(m), cb=lambda: self.win.gen.read(62))
+
+    def _on_gate(self, *_a) -> None:
+        if self._loading:
+            return
+        if self._gid:
+            GLib.source_remove(self._gid)
+
+        def send():
+            self._gid = 0
+            self._send_settings()
+            return False
+        self._gid = GLib.timeout_add(WRITE_DEBOUNCE_MS, send)
+
+    def _on_counter(self, _b, run, reset: bool) -> None:
+        if run is not None:
+            self._counting = run
+        g = self.win.gen
+        g.write(63, *P.counter_cmd(self._counting, reset), cb=lambda: g.read(80))
 
     def _on_mode(self, *_a) -> None:
         if self._loading:
@@ -1076,6 +1148,132 @@ class MemoryPage(Gtk.Box):
                 self.win.toast(f"Saved {f.get_basename()}")
             dlg.save(self.win, None, done)
         self.win.gen.request(P.read_cmd(97), got)
+
+
+class SystemPage(Gtk.Box):
+    """System menu settings: CH2 sync (25), sound (27), brightness (28), load method (32), fine tuning (33),
+    key lock (34, write-only)."""
+
+    def __init__(self, win: "MainWindow") -> None:
+        super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        self.win = win
+        self._loading = False
+        self._bid: dict[int, int] = {}
+        clamp = Adw.Clamp(maximum_size=640, margin_top=12, margin_bottom=12, margin_start=12, margin_end=12)
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
+        clamp.set_child(page)
+        self.append(Gtk.ScrolledWindow(child=clamp, vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER))
+
+        g = Adw.PreferencesGroup(title="CH2 follows CH1",
+                                 description="When on, changing that setting on CH1 also changes CH2. Frequency "
+                                             "sync keeps both channels phase-locked (set the CH2 phase after "
+                                             "turning it on); it works up to 25 MHz. External sync works up to 1 MHz.")
+        self.sync = []
+        for i, name in enumerate(P.SYNC_NAMES):
+            row = Adw.SwitchRow(title=name)
+            row.connect("notify::active", self._on_sync, i)
+            g.add(row)
+            self.sync.append(row)
+        page.append(g)
+
+        g = Adw.PreferencesGroup(title="Front panel")
+        self.lock = Adw.ActionRow(title="Panel keys", subtitle="Lock the keys and knob while the app is in control "
+                                                               "(the generator does not report the lock state)")
+        box = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
+        for label, val in (("Lock", 1), ("Unlock", 0)):
+            b = Gtk.Button(label=label)
+            b.connect("clicked", self._on_lock, val)
+            box.append(b)
+        self.lock.add_suffix(box)
+        g.add(self.lock)
+        self.sound = Adw.SwitchRow(title="Key sound")
+        self.sound.connect("notify::active", self._on_switch, 27)
+        g.add(self.sound)
+        self.bright = Adw.SpinRow(title="Screen brightness", subtitle="%", digits=0, adjustment=Gtk.Adjustment(
+            lower=10, upper=100, step_increment=5, page_increment=10, value=100))
+        self.bright.connect("notify::value", self._on_bright)
+        g.add(self.bright)
+        page.append(g)
+
+        g = Adw.PreferencesGroup(title="Signal")
+        self.load = Adw.ComboRow(title="Arbitrary wave load method", model=Gtk.StringList.new(P.LOAD_METHODS),
+                                 subtitle="Auto plays arbitrary waves with up to 8192 points (smoother); Fast "
+                                          "uses 2048")
+        self.load.connect("notify::selected", self._on_load)
+        g.add(self.load)
+        self.fine = Adw.SpinRow(title="Frequency fine tuning", subtitle="0 – 99, default 50 (System menu page 2)",
+                                digits=0, adjustment=Gtk.Adjustment(lower=0, upper=99, step_increment=1,
+                                                                    page_increment=5, value=50))
+        self.fine.connect("notify::value", self._on_fine)
+        g.add(self.fine)
+        page.append(g)
+        note = Gtk.Label(wrap=True, xalign=0, css_classes=["dim-label", "caption"],
+                         label="Panel-only: language, system colour, auto power-on, CH1/CH2 amplitude fine "
+                               "tuning and factory reset. To keep these settings after power-off, save M00 "
+                               "(the power-on memory) on the Memory tab or long-press Home on the panel.")
+        page.append(note)
+        self.connect("map", lambda *_: self.refresh_now())
+
+    def refresh_now(self) -> None:
+        if self.win.gen.connected:
+            self.win.gen.read(*P.SYSTEM_REGS)
+
+    def refresh(self) -> None:
+        s = self.win.gen.state.system
+        self._loading = True
+        try:
+            for row, v in zip(self.sync, s.sync):
+                row.set_active(v)
+            self.sound.set_active(s.sound)
+            if 28 not in self._bid:
+                self.bright.set_value(max(10, s.brightness))
+            self.load.set_selected(int(s.fast_load))
+            if 33 not in self._bid:
+                self.fine.set_value(s.freq_fine)
+        finally:
+            self._loading = False
+
+    def _write(self, reg: int, *vals: int) -> None:
+        g = self.win.gen
+        g.write(reg, *vals, cb=lambda: g.read(reg))
+
+    def _on_sync(self, _row, _p, i: int) -> None:
+        if self._loading:
+            return
+        flags = [int(r.get_active()) for r in self.sync]
+        self._write(25, *flags)
+
+    def _on_switch(self, row, _p, reg: int) -> None:
+        if not self._loading:
+            self._write(reg, int(row.get_active()))
+
+    def _on_load(self, *_a) -> None:
+        if not self._loading:
+            self._write(32, self.load.get_selected())
+
+    def _debounce(self, reg: int, row) -> None:
+        if self._loading:
+            return
+        if reg in self._bid:
+            GLib.source_remove(self._bid.pop(reg))
+
+        def send():
+            self._bid.pop(reg, None)
+            self._write(reg, int(row.get_value()))
+            return False
+        self._bid[reg] = GLib.timeout_add(WRITE_DEBOUNCE_MS, send)
+
+    def _on_bright(self, *_a) -> None:
+        self._debounce(28, self.bright)
+
+    def _on_fine(self, *_a) -> None:
+        self._debounce(33, self.fine)
+
+    def _on_lock(self, _b, val: int) -> None:
+        if not self.win.gen.connected:
+            self.win.toast("Generator not connected")
+            return
+        self.win.gen.write(34, val, cb=lambda: self.win.toast("Panel keys locked" if val else "Panel keys unlocked"))
 
 
 class ConsolePage(Gtk.Box):
@@ -1319,7 +1517,7 @@ class MainWindow(Adw.ApplicationWindow):
         tv = Adw.ToolbarView()
         header = Adw.HeaderBar()
         self.stack = Adw.ViewStack()
-        switcher = Adw.ViewSwitcher(stack=self.stack, policy=Adw.ViewSwitcherPolicy.WIDE)
+        switcher = Adw.ViewSwitcher(stack=self.stack, policy=Adw.ViewSwitcherPolicy.NARROW)
         header.set_title_widget(switcher)
         self.link_label = Gtk.Label(label="", css_classes=["dim-label", "caption"])
         header.pack_start(self.link_label)
@@ -1345,6 +1543,8 @@ class MainWindow(Adw.ApplicationWindow):
         self.stack.add_titled_with_icon(self.meas, "meas", "Measure", "speedometer-symbolic")
         self.memory = MemoryPage(self)
         self.stack.add_titled_with_icon(self.memory, "memory", "Memory", "document-save-symbolic")
+        self.system = SystemPage(self)
+        self.stack.add_titled_with_icon(self.system, "system", "System", "preferences-system-symbolic")
         self.bode = BodePage(self)
         self.stack.add_titled_with_icon(self.bode, "bode", "Bode", "utilities-system-monitor-symbolic")
         self.console = ConsolePage(self)
@@ -1373,6 +1573,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.sweep.refresh()
         self.mod.refresh()
         self.meas.refresh()
+        self.system.refresh()
         s = self.gen.state
         if s.model:
             self.info_label.set_label(f"PSG90{s.model}  ·  S/N {s.serial}  ·  versions {s.versions}")
@@ -1389,6 +1590,8 @@ class MainWindow(Adw.ApplicationWindow):
                 self.mod.refresh_now()
             elif page == "meas":
                 self.meas.refresh_now()
+            elif page == "system":
+                self.system.refresh_now()
             if self._poll_id is None:
                 self._poll_id = GLib.timeout_add(POLL_MS, self._poll)
         for p in self.panels:
@@ -1404,6 +1607,8 @@ class MainWindow(Adw.ApplicationWindow):
                 self.gen.read(*P.MOD_REGS)
             elif page == "meas":
                 self.gen.read(*P.MEAS_REGS)
+            elif page == "system":
+                self.gen.read(*P.SYSTEM_REGS)
         return True
 
     def _on_close(self, *_a) -> bool:

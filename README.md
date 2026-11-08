@@ -15,10 +15,14 @@ two-channel signal generator. Talks to it over the **BSG145 Bluetooth LE module*
   ~10 s), which is why the app never uses it.
 - **Sweep** of frequency, amplitude or duty cycle, over time or set by an external voltage (VCO input): channel, start/end value, time (10 ms … 640 s), up / down / round trip, linear / log,
   start/stop, with a frequency-vs-time preview.
-- **Modulation**: internal (sine / square / triangle / ramp) or external (MOD input) source; AM, FM, PM, ASK, FSK, PSK, pulse mode ("PWM": exact pulse width / period / invert) and burst (pulse count, trigger source, Trigger button) with modulation frequency, depth, FM/PM deviation and FSK hop
+- **Modulation**: internal (sine / square / triangle / ramp) or external (MOD input) source; AM, FM, PM, ASK, FSK, PSK
+  (with polarity and PSK phase shift), pulse mode ("PWM": exact pulse width / period / invert) and burst (pulse count, trigger source, Trigger button) with modulation frequency, depth, FM/PM deviation and FSK hop
   frequency; shows the generator's AM depth as the textbook depth too (they differ, see below).
-- **Measure** tab: frequency, period, pulse widths and duty of a signal on EXT IN (1 Hz – 100 MHz, 2 – 20 Vpp), and
-  the live count in counter mode (start/stop counting on the panel).
+- **Measure** tab: frequency, period, pulse widths and duty of a signal on EXT IN (1 Hz – 100 MHz, 2 – 20 Vpp), with
+  coupling (AC/DC), gate time and high/low frequency range, and a counter with Start / Stop / Reset.
+- **System** tab: CH2-follows-CH1 sync (waveform, frequency, amplitude, offset, duty, external), front-panel key
+  lock, key sound, screen brightness, arbitrary-wave load method (Auto 8192 / Fast 2048 points) and frequency fine
+  tuning. Language, system colour, auto power-on, amplitude fine tuning and factory reset stay on the panel.
 - **Memory** tab: load / save / clear the generator's memories M00–M99 (M00 is loaded at power-on), read, edit
   and write Programming-mode programs P00–P19 and run or stop them, and save a read-only backup of the
   generator's calibration table.
@@ -65,6 +69,14 @@ Pair the Bluetooth module once: `bluetoothctl scan le`, then `pair` / `trust` it
 | 57 | pulse ("PWM") inverted `ch1,ch2` | 0/1 |
 | 58 | burst idle level `ch1,ch2` | 0 zero, 1 +max, 2 −max |
 | 61 | burst pulse count `ch1,ch2` | 1 … 100000000 |
+| 59 | ASK / FSK / PSK polarity `ch1,ch2` (PSK phase shift uses 51 / 52, ASK level 45 / 46) | 0 positive, 1 negative |
+| 62 | measure settings `coupling,gate,range` | coupling 0 AC / 1 DC, gate in ms (1–10000), range 0 > 2 kHz / 1 < 2 kHz |
+| 63 | counter `0,run,reset` | run 1 counting / 0 stopped, reset 1 clears the count |
+| 27 | key sound | 1 on, 0 off |
+| 28 | screen brightness | % (reads 101 at the factory default) |
+| 32 | arbitrary wave load method | 0 Auto (8192 points), 1 Fast (2048) |
+| 33 | frequency fine tuning | 0–99, default 50 |
+| 34 | front-panel key lock (write-only) | 1 locked, 0 unlocked |
 | 80 | counter value (counter screen `0,5,0,2`) | |
 | 81 | measured frequency (measure screen `0,4,0,1`) | Hz |
 | 83 / 84 | measured positive / negative pulse width | ns |

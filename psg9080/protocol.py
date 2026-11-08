@@ -32,6 +32,12 @@ Modulation (verified on a scope 2026-11-07; odd register = CH1, even = CH2):
 Measurement input EXT IN (verified 2026-11-07): screen 0,4,0,1 measure, 0,5,0,2 counter (counting is started with
   the panel's ON key). 80 count, 81 frequency Hz, 83/84 positive/negative width ns, 85 period ns, 86 duty 0.01 %.
   Values freeze when the screen is left. Never write 76: it starts Programming mode, which loads memory M00 over the live settings.
+  62 measure settings "coupling,gate,mode": coupling 0 AC 1 DC, gate time in ms (1..10000), mode 0 high (>2 kHz)
+     1 low (<2 kHz). 63 counter "x,run,reset": run 1 counts / 0 stops, reset 1 clears the count (one-shot).
+  59 ASK/FSK/PSK polarity "ch1,ch2" 0 positive 1 negative. PSK phase uses 51/52, ASK level 45/46.
+System menu: 27 sound 1 on / 0 off, 28 LCD brightness % (reads 101 at the factory default = 100 %),
+  32 wave load method 0 Auto (8192 points) / 1 Fast (2048), 33 frequency fine tuning 0..99 (default 50),
+  34 front-panel key lock 1 locked / 0 unlocked (write-only). 25 CH2 sync flags (see above).
   "PWM" (type 6) is a precision pulse generator on its own screen 0,1,0,8: 53/54 pulse width in 1 ns,
   55/56 period in 10 ns, 57 "ch1,ch2" inverted output.
   AM "depth" m: the envelope runs from the set amplitude down to (1-m) of it; textbook depth = m/(2-m).
@@ -255,7 +261,7 @@ SCREEN_MOD = (0, 1, 0, 12)
 SCREEN_PWM = (0, 1, 0, 8)
 
 MOD_TYPES = ["AM", "FM", "PM", "ASK", "FSK", "PSK", "PWM", "Burst"]
-MOD_REGS = [24, 40, 41, 42] + list(range(43, 59)) + [60, 61]
+MOD_REGS = [24, 40, 41, 42] + list(range(43, 62))
 MOD_SHAPES = ["Sine", "Square", "Triangle", "Ramp"]
 MOD_SOURCES = ["Internal", "External (MOD input)"]
 BURST_IDLE = ["Zero", "Positive maximum", "Negative maximum"]
@@ -280,11 +286,15 @@ class Modulation:
     pulse_width_ns: int = 100
     pulse_period_10ns: int = 1000
     pulse_inverted: bool = False
+    negative: bool = False         # ASK/FSK/PSK polarity (register 59)
 
 
 SCREEN_MEASURE = (0, 4, 0, 1)
 SCREEN_COUNTER = (0, 5, 0, 2)
-MEAS_REGS = [24, 80, 81, 83, 84, 85, 86]
+MEAS_REGS = [24, 62, 80, 81, 83, 84, 85, 86]
+MEAS_COUPLING = ["AC", "DC"]
+MEAS_MODES = ["High frequency (> 2 kHz)", "Low frequency (< 2 kHz)"]
+GATE_MS_MAX = 10_000
 
 
 @dataclass
@@ -295,6 +305,32 @@ class Measurement:
     neg_width_ns: int = 0
     period_ns: int = 0
     duty: int = 0                  # 0.01 %
+    dc: bool = False               # coupling (register 62)
+    gate_ms: int = 1000
+    low_freq: bool = False
+
+
+def meas_settings_cmd(m: "Measurement") -> tuple[int, ...]:
+    return (int(m.dc), max(1, min(GATE_MS_MAX, m.gate_ms)), int(m.low_freq))
+
+
+def counter_cmd(run: bool, reset: bool = False) -> tuple[int, ...]:
+    """Register 63: start / stop counting; reset clears the count (verified on the emulator, fw 1.20)."""
+    return (0, int(run), int(reset))
+
+
+SYNC_NAMES = ["Waveform", "Frequency", "Amplitude", "Offset", "Duty cycle", "External"]
+SYSTEM_REGS = [25, 27, 28, 32, 33]
+LOAD_METHODS = ["Auto (up to 8192 points)", "Fast (2048 points)"]
+
+
+@dataclass
+class System:
+    sync: list[bool] = field(default_factory=lambda: [False] * 6)   # register 25
+    sound: bool = True                                             # 27
+    brightness: int = 100                                          # 28, %
+    fast_load: bool = False                                        # 32
+    freq_fine: int = 50                                            # 33, 0..99
 
 
 def mod_screen(mod_type: int) -> tuple[int, ...]:
@@ -343,6 +379,7 @@ class DeviceState:
     mod: list[Modulation] = field(default_factory=lambda: [Modulation(), Modulation()])
     screen: tuple[int, ...] = ()
     meas: Measurement = field(default_factory=Measurement)
+    system: System = field(default_factory=System)
 
     def apply(self, reg: int, fields: list[str]) -> None:
         f = [x.strip() for x in fields]
@@ -375,6 +412,23 @@ class DeviceState:
                 attr = {80: "count", 81: "freq_hz", 83: "pos_width_ns", 84: "neg_width_ns", 85: "period_ns",
                         86: "duty"}[reg]
                 setattr(self.meas, attr, int(f[0]))
+            elif reg == 25:
+                digits = "".join(f)
+                if len(digits) >= 6:
+                    self.system.sync = [c == "1" for c in digits[:6]]
+            elif reg == 27:
+                self.system.sound = f[0] == "1"
+            elif reg == 28:
+                self.system.brightness = min(100, int(f[0]))
+            elif reg == 32:
+                self.system.fast_load = f[0] == "1"
+            elif reg == 33:
+                self.system.freq_fine = int(f[0])
+            elif reg == 59:
+                self.mod[0].negative, self.mod[1].negative = f[0] == "1", f[1] == "1"
+            elif reg == 62:
+                m = self.meas
+                m.dc, m.gate_ms, m.low_freq = f[0] == "1", int(f[1]), f[2] == "1"
             elif reg in (68, 69, 70, 71):
                 attr = ("start_mv", "end_mv", "start_duty", "end_duty")[reg - 68]
                 setattr(self.sweep, attr, int(f[0]))

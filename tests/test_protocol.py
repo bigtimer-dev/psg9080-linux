@@ -133,6 +133,27 @@ class ModulationTest(unittest.TestCase):
         with self.assertRaises(P.ProtocolError):
             P.write_cmd(76, 1)
 
+    def test_system_and_settings(self):
+        st = P.DeviceState()
+        # replies as the firmware sends them (emulator, fw 1.20)
+        for line in (":r25=010000.", ":r27=0.", ":r28=101.", ":r32=1.", ":r33=60.", ":r59=1,0.",
+                     ":r62=1,00500,1."):
+            _, reg, fields = P.parse_reply(line)
+            st.apply(reg, fields)
+        s = st.system
+        self.assertEqual(s.sync, [False, True, False, False, False, False])
+        self.assertEqual((s.sound, s.brightness, s.fast_load, s.freq_fine), (False, 100, True, 60))
+        self.assertEqual((st.mod[0].negative, st.mod[1].negative), (True, False))
+        m = st.meas
+        self.assertEqual((m.dc, m.gate_ms, m.low_freq), (True, 500, True))
+        self.assertEqual(P.meas_settings_cmd(m), (1, 500, 1))
+        self.assertEqual(P.meas_settings_cmd(P.Measurement(gate_ms=99999)), (0, 10000, 0))
+        self.assertEqual(P.counter_cmd(True), (0, 1, 0))
+        self.assertEqual(P.counter_cmd(False, reset=True), (0, 0, 1))
+        self.assertEqual(P.write_cmd(25, 0, 1, 0, 0, 0, 0), b":w25=0,1,0,0,0,0.\r\n")
+        self.assertIn(59, P.MOD_REGS)
+        self.assertIn(62, P.MEAS_REGS)
+
     def test_external_sweep(self):
         self.assertEqual(P.sweep_screen(1, external=True), (0, 7, 1, 7))
         self.assertEqual(P.sweep_screen(2), (0, 6, 2, 6))
